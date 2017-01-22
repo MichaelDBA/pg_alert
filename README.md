@@ -3,8 +3,9 @@ This python program monitors the PostgreSQL log file and sends email alerts base
 `git clone https://github.com/MichaelDBA/pg_alert.git pg_alert`
 
 (c) 2012-2016, 2017 SQLEXEC LLC
-*** GNU V3 and MIT licenses are conveyed accordingly ***
-
+<br/>
+GNU V3 and MIT licenses are conveyed accordingly.
+<br/>
 Bugs can be reported @ michael@sqlexec.com
 
 ## History

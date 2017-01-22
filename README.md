@@ -7,7 +7,7 @@ This python program monitors the PostgreSQL log file and sends email alerts base
 Bugs can be reported @ michael@sqlexec.com
 
 ## Overview
-Most programs that monitor log files do so directly.  This program incurs a much less footprint by only monitoring the output of a provided grep command against the PG log file from the configuration file.  Here is a simple example:
+Most programs that monitor log files do so directly.  This program incurs a much less footprint by only monitoring the output of a provided grep command against the PG log file tail.  Here is a simple example of the grep command that will be used derived from the configuration file:
 <br/>
 `GREP=ERROR:\|FATAL:\|WARN:`
 <br/><br/>

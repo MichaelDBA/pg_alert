@@ -21,3 +21,4 @@ setup(name='pg_alert',
         'Programming Language :: Python :: 2.7',
                   ],
       )
+

@@ -12,7 +12,7 @@ Bugs can be reported @ michael@sqlexec.com
 The first version of this program was created back in 2012.  It was big and messy since the logic was based upon parsing the current PG log file.  A major rewrite was undertaken in 2016 using the new tail logic. Since then it has been uploaded to this public github repo to share with the rest of the PG community.
 
 ## Overview
-Most programs that monitor log files do so directly.  This program incurs a much less footprint by only monitoring the output of a provided grep command against the PG log file tail.  Here is a simple example of the grep command that will be used derived from the configuration file:
+Most programs that monitor log files do so directly.  This program incurs a much less footprint by only monitoring the output of a provided grep command against the PG log file tail.  Here is a simple example of the grep command that will be used derived from the pg_alert configuration file:
 <br/>
 `GREP=ERROR:\|FATAL:\|WARN:`
 <br/><br/>
@@ -20,7 +20,7 @@ The ensuing output is what pg_alert monitors. So, we have 2 processes:
 <br/>
 1. pg_alert
 <br/>
-2. grepping the tail the PG log file
+2. grepping the PG log file tail
 <br/><br/>
 The configuration file, pg_alert.conf, is where all the filtering is done on the resulting grepped tail output of the PG log file.
 <br/><br/>

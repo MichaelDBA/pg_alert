@@ -6,6 +6,9 @@ This python program monitors the PostgreSQL log file and sends email alerts base
 
 Bugs can be reported @ michael@sqlexec.com
 
+## History
+The first version of this program was created back in 2012.  It was big and messy since the logic was based upon parsing the current PG log file.  A major rewrite was undertaken in 2016 using the new tail logic. Since then it has been uploaded to this public github repo to share with the rest of the  I deemed it worthy to upload to github for the benefit of the PG community.
+
 ## Overview
 Most programs that monitor log files do so directly.  This program incurs a much less footprint by only monitoring the output of a provided grep command against the PG log file tail.  Here is a simple example of the grep command that will be used derived from the configuration file:
 <br/>
@@ -42,5 +45,4 @@ All input fields are taken from the associated configuration file, pg_alert.conf
 ## Examples
 In this example, pg_alert will run for 60 minutes.
 pg_alert.py -m 60 -c /var/lib/postgresql/scripts/pg_alert.conf
-
 

@@ -26,8 +26,9 @@ The configuration file, pg_alert.conf, is where all the filtering is done on the
 <br/><br/>
 
 ## Requirements
-1. python 2.6 or 2.7
+*1. python 2.6 or 2.7
 2. packages: pthon-psutil, psycopg2
+3. PG Log file format that does not extent do time, i.e., hours, minutes, seconds.
 
 ## Inputs
 All input fields are taken from the associated configuration file, pg_alert.conf.  You can override some parameters on the command line.  The only required parameter is the location of the configuration file.

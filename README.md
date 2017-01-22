@@ -32,7 +32,7 @@ The configuration file, pg_alert.conf, is where all the filtering is done on the
 <br/>
 log_filename='postgresql-%Y-%m-%d.log'
 <br/>
-log_filename='postgresql-%Y-%m-%d.log'
+log_filename='postgresql-%a.log'
 
 ## Inputs
 All input fields are taken from the associated configuration file, pg_alert.conf.  You can override some parameters on the command line.  The only required parameter is the location of the configuration file.

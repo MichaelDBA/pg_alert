@@ -9,7 +9,7 @@ GNU V3 and MIT licenses are conveyed accordingly.
 Bugs can be reported @ michael@sqlexec.com
 
 ## History
-The first version of this program was created back in 2012.  It was big and messy since the logic was based upon parsing the current PG log file.  A major rewrite was undertaken in 2016 using the new tail logic. Since then it has been uploaded to this public github repo to share with the rest of the PG community.
+The first version of this program was created back in 2012.  It was big and messy since the logic was based upon parsing the current PG log file.  A major rewrite was undertaken in 2016 using the new tail logic. Since then it has been uploaded to this public github repo to share with the rest of the PG community.  It has been tested extensively with Ubuntu/Debian distros using PG 9.x.  Please provide details of errors with other distros or PG versions so we can update accordingly.
 
 ## Overview
 Most programs that monitor log files do so directly.  This program incurs a much less footprint by only monitoring the output of a provided grep command against the PG log file tail.  Here is a simple example of the grep command that will be used derived from the pg_alert configuration file:
@@ -26,9 +26,9 @@ The configuration file, pg_alert.conf, is where all the filtering is done on the
 <br/><br/>
 
 ## Requirements
-1. python 2.6 or 2.7
-2. packages: pthon-psutil, psycopg2
-3. PG Log file format that does not extent do time, i.e., hours, minutes, seconds.  
+2. python 2.7
+3. packages: python-psutil, psycopg2
+4. PG Log file format that does not extent do time, i.e., hours, minutes, seconds.  
 log_filename='postgresql-%Y-%m-%d.log'
 <br/>
 log_filename='postgresql-%a.log'

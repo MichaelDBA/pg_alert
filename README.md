@@ -12,6 +12,7 @@ Most programs that monitor log files do so directly.  This program incurs a much
 `GREP=ERROR:\|FATAL:\|WARN:`
 <br/><br/>
 The ensuing output is what pg_alert monitors. So, we have 2 proceses:
+<br/>
 1. pg_alert
 <br/>
 2. tailing the PG log file

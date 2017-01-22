@@ -8,11 +8,14 @@ Bugs can be reported @ michael@sqlexec.com
 
 ## Overview
 Most programs that monitor log files do so directly.  This program incurs a much less footprint by only monitoring the output of a provided grep command against the PG log file from the configuration file.  Here is a simple example:
+<br/>
 `GREP=ERROR:\|FATAL:\|WARN:`
+<br/><br/>
 The ensuing output is what pg_alert monitors. So, we have 2 proceses:
 1. pg_alert
+<br/>
 2. tailing the PG log file
-
+<br/>
 ## Requirements
 1. python 2.6 or 2.7
 2. packages: pthon-psutil, psycopg2

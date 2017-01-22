@@ -29,7 +29,6 @@ The configuration file, pg_alert.conf, is where all the filtering is done on the
 1. python 2.6 or 2.7
 2. packages: pthon-psutil, psycopg2
 3. PG Log file format that does not extent do time, i.e., hours, minutes, seconds.  
-<br/>
 log_filename='postgresql-%Y-%m-%d.log'
 <br/>
 log_filename='postgresql-%a.log'

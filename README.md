@@ -26,6 +26,7 @@ The configuration file, pg_alert.conf, is where all the filtering is done on the
 <br/><br/>
 
 ## Requirements
+1. Linux mail utility (mailutils)
 2. python 2.7
 3. packages: python-psutil, psycopg2
 4. PG Log file format that does not extent do time, i.e., hours, minutes, seconds.  

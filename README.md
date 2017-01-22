@@ -43,6 +43,8 @@ All input fields are taken from the associated configuration file, pg_alert.conf
 <br/>
 
 ## Examples
-In this example, pg_alert will run for 60 minutes.
+In these examples, pg_alert will run for 60 minutes.
 pg_alert.py -m 60 -c /var/lib/postgresql/scripts/pg_alert.conf
- 
+<br/>
+python pg_alert.pyc -m 60 -c /var/lib/postgresql/scripts/pg_alert.conf
+nohup python pg_alert.pyc -m 60 -c /var/lib/postgresql/scripts/pg_alert.conf &

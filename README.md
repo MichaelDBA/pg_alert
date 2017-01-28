@@ -56,3 +56,4 @@ In these examples, pg_alert will run for 60 minutes.
 >python pg_alert.pyc -m 60 -c /var/lib/postgresql/scripts/pg_alert.conf
 <br/>
 >nohup python pg_alert.pyc -m 60 -c /var/lib/postgresql/scripts/pg_alert.conf &
+ 

@@ -160,7 +160,7 @@ def get_lock(processname):
 
 class pgmon:
     def __init__(self):
-        self.version       = "pg_alert (V 2.0 Jan. 28, 2017)"
+        self.version       = "pg_alert (V 2.0 Jan. 29, 2017)"
         self.system         = platform.system()
         self.python_version = platform.python_version()
         self.description   = "%s is a PostgreSQL alerting tool" % self.version
@@ -491,11 +491,11 @@ class pgmon:
             self.verbose = self.options.verbose
 
         if self.dbname == '':
-            self.dbname     = config.get("optional", "dbname",1)
+            self.dbname     = config.get("required", "dbname",1)
         if self.dbuser == '':            
-            self.dbuser     = config.get("optional", "dbuser",1)
+            self.dbuser     = config.get("required", "dbuser",1)
         if self.dbhost == '':                        
-            self.dbhost     = config.get("optional", "dbhost",1)
+            self.dbhost     = config.get("required", "dbhost",1)
         if self.pgport == '':                        
             self.pgport     = config.get("optional", "pgport",1)
         if self.pgport == "":
@@ -566,7 +566,7 @@ class pgmon:
 	cur.close()
         '''
 
-        interim = config.get("optional", "minutes",1)
+        interim = config.get("required", "minutes",1)
         if interim == "":
             self.minutes = 0
         elif interim.isdigit():
@@ -637,7 +637,7 @@ class pgmon:
             if int(value) > 0:
                 self.pgsql_tmp_threshold = int(value)
     
-        self.from_      = config.get("optional", "from",1)                
+        self.from_      = config.get("required", "from",1)                
         self.grepfilter = config.get("optional", "grep",1)
         if self.grepfilter == '':
             pass

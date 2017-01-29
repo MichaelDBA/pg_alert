@@ -82,7 +82,7 @@ The whole point of pg_alert is to send email alerts. pg_alert also supports SMS 
 * ssmtp
 * smtp
 
-MAIL is really **mailx** since there is a symlink pointing to a particular mailx version.  Two common ones are **bsd-mailx** and **heriloom-mailx**.  bsd-mailx is the more stable version. If you have a choice please make your symlinks point to the bsd version.  pg_alerty will try to find and use it, but this is not guaranteed.
+MAIL is really **mailx** since there is a symlink pointing to a particular mailx version.  Two common ones are **bsd-mailx** and **heriloom-mailx**.  **bsd-mailx** is the more stable version. If you have a choice please make your symlinks point to the bsd version.  pg_alerty will try to find and use it, but this is not guaranteed.
 >ls /usr/bin/mail -la
 <br /><br />
 >lrwxrwxrwx 1 root root 22 Mar  1  2016 /usr/bin/mail -> /etc/alternatives/mail
@@ -91,3 +91,4 @@ MAIL is really **mailx** since there is a symlink pointing to a particular mailx
 <br /><br />
 >lrwxrwxrwx 1 root root 23 Mar  1  2016 /etc/alternatives/mail -> /usr/bin/heirloom-mailx
 <br /><br />
+Note that the exmample above is really using the **heirloom** version of mailx.

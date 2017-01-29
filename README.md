@@ -92,4 +92,5 @@ Note that the example above is really using the **heirloom** version of mailx.
 
 **ssmtp** is a simple mail transfer agent (MTA) to deliver mail from a computer to a mail hub (SMTP server). It is not as robust as SMTP.
 
-**smpt** in this context designates the python email delivery protocol using **smtplib** – Simple Mail Transfer Protocol client.
+**smtp** designates to use the python email delivery protocol, **smtplib** – Simple Mail Transfer Protocol client.  
+

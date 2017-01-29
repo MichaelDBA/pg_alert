@@ -71,10 +71,12 @@ The **SQLSTATES** configuration parameter is probably one of the most powerful f
 [PostgreSQL Error Codes](http://www.postgresql.org/docs/9.6/static/errcodes-appendix.html)
 
 SQLSTATES is only applicable if you have the correct **log_line_prefix** defined, where the sqlstate can be identified by a **pre** and  **post** delimiter.  You do not have to specify the delimiter since pg_alert will determine that, but you do have to make sure that there are delimiters and that the delimiter are not shared with any other **%** value.  Otherwise, SQLSTATE filtering is disabled during the pg_alert session.  Here are some good examples. Note the second example uses 3 spaces as a pre delimiter to uniquely identify it.
->        log_line_prefix = '%m %u@%d[%p: %i ] %r [%a] sqlstate=%e tx:%x : '
-<br /><br />
->        log_line_prefix = '%m %u@%d[%p: %i ] %r [%a]   %e tx:%x : '
 
+        >        log_line_prefix = '%m %u@%d[%p: %i ] %r [%a] sqlstate=%e tx:%x : '
+<br /><br />
+
+        >        log_line_prefix = '%m %u@%d[%p: %i ] %r [%a]   %e tx:%x : '
+<br /><br />
 
 ### MAIL ALERTS
 The whole point of pg_alert is to send email alerts. pg_alert also supports SMS text messages as well. The current version supports 3 types of mail protocol:

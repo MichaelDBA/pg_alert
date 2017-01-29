@@ -32,10 +32,11 @@ The program generates 2 output files:
 <br/><br/>
 
 ## Requirements
-1. Linux mail utility (mailutils)
-2. python 2.7
-3. python packages: python-psutil, psycopg2
-4. PG Log file format that does not extent do time, i.e., hours, minutes, seconds.  
+1. Linux, no windows pg server monitoring at the present time.
+2. mail utility (mailutils)
+3. python 2.7
+4. python packages: python-psutil, psycopg2
+5. PG Log file format that does not extent do time, i.e., hours, minutes, seconds.  
 log_filename='postgresql-%Y-%m-%d.log'
 <br/>
 log_filename='postgresql-%a.log'

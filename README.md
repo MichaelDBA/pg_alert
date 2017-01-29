@@ -75,3 +75,17 @@ SQLSTATES is only applicable if you have the correct **log_line_prefix** defined
 <br /><br />
 >log_line_prefix = '%m %u@%d[%p: %i ] %r [%a]   %e tx:%x : '
 <br /><br />
+### MAIL ALERTS
+The whole point of pg_alert is to send email alerts. pg_alert also supports SMS messages as well. The current version supports 3 types of mail protocol:
+# mail (mailx)
+# ssmtp
+# smtp
+MAIL is really **mailx** since there is a symlink pointing to a particular mailx version.  Two common ones are **bsd-mailx** and **heriloom-mailx**.  bsd-mailx is the more stable version. If you have a choice please make your symlinks point to the bsd version.  pg_alerty will try to find and use it, but this is not guaranteed.
+>ls /usr/bin/mail -la
+<br /><br />
+>lrwxrwxrwx 1 root root 22 Mar  1  2016 /usr/bin/mail -> /etc/alternatives/mail
+<br /><br /><br /><br />
+>ls /etc/alternatives/mail -la
+<br /><br />
+>lrwxrwxrwx 1 root root 23 Mar  1  2016 /etc/alternatives/mail -> /usr/bin/heirloom-mailx
+<br /><br />

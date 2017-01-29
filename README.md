@@ -74,7 +74,8 @@ SQLSTATES is only applicable if you have the correct **log_line_prefix** defined
 >log_line_prefix = '%m %u@%d[%p: %i ] %r [%a] sqlstate=%e tx:%x : '
 <br /><br />
 >log_line_prefix = '%m %u@%d[%p: %i ] %r [%a]   %e tx:%x : '
-<br /><br />
+
+
 ### MAIL ALERTS
 The whole point of pg_alert is to send email alerts. pg_alert also supports SMS messages as well. The current version supports 3 types of mail protocol:
 # mail (mailx)

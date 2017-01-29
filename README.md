@@ -23,7 +23,11 @@ The ensuing output is what pg_alert monitors. So, we have 2 processes:
 * grepping the PG log file tail
 <br/><br/>
 
-The configuration file, **pg_alert.conf**, is where all the filtering is done on the resulting grepped tail output of the PG log file.
+The configuration file, **pg_alert.conf**, is where all the filtering is done on the resulting grepped tail output of the PG log file.  This configuration file contains detailed comments about each configurable field.
+
+The program generates 2 output files:
+1. alerts-YYYY-MMDD.log (the output of the grepped pg log tail)
+2. alerts-history-YYYY-MMDD.log (output from the pg_alert program, shows things evaluated and alerted on)
 <br/><br/>
 
 ## Requirements

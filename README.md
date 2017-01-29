@@ -94,3 +94,4 @@ Note that the example above is really using the **heirloom** version of mailx.
 
 **smtp** designates to use the python email delivery protocol, **smtplib** – Simple Mail Transfer Protocol client.  
 
+

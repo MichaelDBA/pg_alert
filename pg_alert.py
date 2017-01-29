@@ -182,8 +182,8 @@ class pgmon:
         self.logalert      = ""
         self.loghistory    = ""
         self.sendemail     = False
-        self.ignoreautovacdaemon = True
-        self.ignoreuservac = True
+        self.ignore_autovacdaemon = True
+        self.ignore_uservac = True
         self.minutes       = 0 
         self.keeplogdays   = -1
         self.seconds       = 0
@@ -206,7 +206,7 @@ class pgmon:
         self.dbhost        = ""
         self.pgport        = ""
         self.clusterid     = ""
-        self.grepfilter    = "ERROR:\|FATAL:\|WARN:"
+        self.grepfilter    = "FATAL:"
         self.sqlstate      = ""
         self.sqlclass      = ""
         self.sqlstates     = []
@@ -223,7 +223,7 @@ class pgmon:
         self.verbose         = False
         self.monitorlag      = False
         self.alert_stmt_timeout = False
-        self.lockwait        = 9999
+        self.lockwait        = 1
         self.tempbytesthreshold = 999999999999
         self.server_version  = ''
 	self.server_version_num = -1
@@ -252,7 +252,7 @@ class pgmon:
         self.dirthreshold         = 99
         self.idletransthreshold   = 9999
         self.querytransthreshold  = 9999
-        self.checkinterval        = 3600
+        self.checkinterval        = 300
         
         self.lastconntotalert     = None
         self.lastconnactivealert  = None        
@@ -411,7 +411,7 @@ class pgmon:
                 
         config = ConfigParser.SafeConfigParser({'sqlstate':'', 'sqlclass':'', 'lockwait':'', 'checkinterval':'', \
                  'loadthreshold':'', 'dirthreshold':'', 'idletransthreshold':'', 'querytransthreshold':'', 'pgsql_tmp_threshold':'', 'lockfilter':'', \
-                 'pglog_directory':'', 'alert_directory':'', 'ignoreautovacdaemon':'True', 'ignoreuservac':'True', 'tempbytesthreshold':'', 'slaves':'', \
+                 'pglog_directory':'', 'alert_directory':'', 'ignore_autovacdaemon':'True', 'ignore_uservac':'True', 'tempbytesthreshold':'', 'slaves':'', \
                  'monitorlag':'False', 'alert_stmt_timeout':'False', 'ignoreapps':'', 'ignoreusers':'','ignorequeries':'', 'suspended':'False', \
                  'mail_method':'', 'smtp_server':'', 'smtp_account':'', 'smtp_port':'', 'smtp_password':'', 'sms':''})        
         
@@ -469,8 +469,8 @@ class pgmon:
                 self.mailbin ='/usr/bin/bsd-mailx'
         
         
-        self.ignoreautovacdaemon = config.getboolean('optional', 'ignoreautovacdaemon')
-        self.ignoreuservac       = config.getboolean('optional', 'ignoreuservac')
+        self.ignore_autovacdaemon = config.getboolean('optional', 'ignore_autovacdaemon')
+        self.ignore_uservac       = config.getboolean('optional', 'ignore_uservac')
         self.monitorlag = config.getboolean('optional', 'monitorlag')
         self.verbose    = config.getboolean('required', 'verbose')
         self.alert_stmt_timeout = config.getboolean('optional', 'alert_stmt_timeout')
@@ -796,7 +796,7 @@ class pgmon:
         # re-initiate reading of config file
         config = ConfigParser.SafeConfigParser({'sqlstate':'', 'sqlclass':'', 'lockwait':'', 'checkinterval':'', \
                  'loadthreshold':'', 'dirthreshold':'', 'idletransthreshold':'', 'querytransthreshold':'', 'pgsql_tmp_threshold':'', 'lockfilter':'', \
-                 'pglog_directory':'', 'alert_directory':'', 'ignoreautovacdaemon':'True', 'ignoreuservac':'True', 'tempbytesthreshold':'', 'slaves':'', \
+                 'pglog_directory':'', 'alert_directory':'', 'ignore_autovacdaemon':'True', 'ignore_uservac':'True', 'tempbytesthreshold':'', 'slaves':'', \
                  'monitorlag':'False', 'alert_stmt_timeout':'False', 'ignoreapps':'', 'ignoreusers':'','ignorequeries':'', 'suspended':'False', \
                  'mail_method':'', 'smtp_server':'', 'smtp_account':'', 'smtp_port':'', 'smtp_password':'', 'sms':''})                         
         config.read(self.configfile)
@@ -805,8 +805,8 @@ class pgmon:
         if not self.verbose:
             self.verbose = self.options.verbose
 
-        self.ignoreautovacdaemon = config.getboolean('optional', 'ignoreautovacdaemon')
-        self.ignoreuservac       = config.getboolean('optional', 'ignoreuservac')
+        self.ignore_autovacdaemon = config.getboolean('optional', 'ignore_autovacdaemon')
+        self.ignore_uservac       = config.getboolean('optional', 'ignore_uservac')
         self.monitorlag = config.getboolean('optional', 'monitorlag')
         self.verbose    = config.getboolean('required', 'verbose')
         self.alert_stmt_timeout = config.getboolean('optional', 'alert_stmt_timeout')
@@ -1386,7 +1386,7 @@ class pgmon:
         # re-initiate reading of config file
         config = ConfigParser.SafeConfigParser({'sqlstate':'', 'sqlclass':'', 'lockwait':'', 'checkinterval':'', \
                  'loadthreshold':'', 'dirthreshold':'', 'idletransthreshold':'', 'querytransthreshold':'', 'pgsql_tmp_threshold':'', 'lockfilter':'',  \
-                 'log_directory':'', 'alert_directory':'', 'ignoreautovacdaemon':'True', 'ignoreuservac':'True', 'tempbytesthreshold':'', 'slaves':'', \
+                 'log_directory':'', 'alert_directory':'', 'ignore_autovacdaemon':'True', 'ignore_uservac':'True', 'tempbytesthreshold':'', 'slaves':'', \
                  'monitorlag':'False', 'alert_stmt_timeout':'False', 'ignoreapps':'', 'ignoreusers':'','ignorequeries':'', 'suspended':'False'})        
         config.read(self.configfile)
     
@@ -1603,9 +1603,9 @@ class pgmon:
         cur = self.conn.cursor()
         s1 = " "  
         s2 = " "
-        if self.ignoreautovacdaemon:
+        if self.ignore_autovacdaemon:
             s1 = " and query not ilike 'autovacuum: %' "
-        if self.ignoreuservac:
+        if self.ignore_uservac:
             s2 = " and query not ilike 'vacuum analyze %' and query not ilike 'analyze %' "            
 
         if len(self.ignoreapps) == 0:
@@ -1869,12 +1869,12 @@ class pgmon:
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                    
         msg = '%s: verbose=%s sendmail=%s check_sqlstate=%s max_alerts=%d clusterid=%s  pgport=%s  from_=%s  to=%s  minutes=%d  keeplogdays=%d log_dir=%s alert_dir=%s data_directory=%s  ' \
               'dbname=%s  dbuser=%s  dbhost=%s sqlstates=%s sqlclasses=%s prefix=***%s*** postfix=***%s*** log_line_prefix=%s lockwait=%d checkinterval=%d  loadthreshold=%d  ' \
-              'dirthreshold=%d  idletransthreshold=%d querytransthreshold=%d  pgsql_tmp_threshold=%d ignoreautovacdaemon=%s ignoreuservac=%s slaves=%s ignoreapps=%s ' \
+              'dirthreshold=%d  idletransthreshold=%d querytransthreshold=%d  pgsql_tmp_threshold=%d ignore_autovacdaemon=%s ignore_uservac=%s slaves=%s ignoreapps=%s ' \
               'ignoreusers=%s monitorlag=%s alert_stmt_timeout=%s ignorequeries=%s server_version=%s server_version_num=%d suspended=%s mail_method=%s smtp_server=%s, smtp_account=%s\n' \
               % (now,self.verbose, self.sendemail, self.check_sqlstate, self.max_alerts, self.clusterid, self.pgport, self.from_, self.to, self.minutes, self.keeplogdays, self.pglog_directory, self.alert_directory ,\
                  self.data_directory, self.dbname, self.dbuser, self.dbhost, self.sqlstates, self.sqlclasses, self.sqlstateprefix, self.sqlstatepostfix, self.log_line_prefix, \
                  self.lockwait, self.checkinterval, self.loadthreshold, self.dirthreshold, self.idletransthreshold, self.querytransthreshold, self.pgsql_tmp_threshold, \
-                 self.ignoreautovacdaemon, self.ignoreuservac, self.slaves, self.ignoreapps, self.ignoreusers, self.monitorlag, self.alert_stmt_timeout, self.ignorequeries, \
+                 self.ignore_autovacdaemon, self.ignore_uservac, self.slaves, self.ignoreapps, self.ignoreusers, self.monitorlag, self.alert_stmt_timeout, self.ignorequeries, \
                  self.server_version, self.server_version_num, self.suspended, self.mail_method, self.smtp_server, self.smtp_account)
         self.printit(msg)
         return

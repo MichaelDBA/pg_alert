@@ -67,4 +67,6 @@ In these examples, pg_alert will run for 60 minutes.
 ## Details
 This section gets into the nuances of pg_alert.
 ### SQLSTATES
-The **SQLSTATES** configuration parameter is probably one of the most powerful filtering features of pg_alert.
+The **SQLSTATES** configuration parameter is probably one of the most powerful filtering features of pg_alert.  Here you can filter out SQLSTATES and entire SQLCLASSES.  SQLCODES are reported in the postgresql log file as sqlstate. You can also specify a class to ignore based on official postgresql documentation:
+[PostgreSQL Error Codes](http://www.postgresql.org/docs/9.6/static/errcodes-appendix.html)
+

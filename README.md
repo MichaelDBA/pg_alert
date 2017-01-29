@@ -64,3 +64,7 @@ In these examples, pg_alert will run for 60 minutes.
 <br/>
 >nohup python pg_alert.pyc -m 60 -c /var/lib/postgresql/scripts/pg_alert.conf &
  
+## Details
+This section gets into the nuances of pg_alert.
+### SQLSTATES
+The **SQLSTATES** configuration parameter is probably one of the most powerful filtering features of pg_alert.

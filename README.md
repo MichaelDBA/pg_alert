@@ -86,9 +86,10 @@ MAIL is really **mailx** since there is a symlink pointing to a particular mailx
 >ls /usr/bin/mail -la
 <br /><br />
 >lrwxrwxrwx 1 root root 22 Mar  1  2016 /usr/bin/mail -> /etc/alternatives/mail
-<br /><br /><br /><br />
+<br /><br />
 >ls /etc/alternatives/mail -la
 <br /><br />
 >lrwxrwxrwx 1 root root 23 Mar  1  2016 /etc/alternatives/mail -> /usr/bin/heirloom-mailx
 <br /><br />
+
 Note that the exmample above is really using the **heirloom** version of mailx.

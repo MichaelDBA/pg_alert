@@ -31,6 +31,8 @@ The program generates 2 output files:
 2. alerts-history-YYYY-MMDD.log (output from the pg_alert program, shows things evaluated and alerted on)
 <br/><br/>
 
+pg_alert analyzes and alerts primarily on PG log file contents.  It also analyzes and alerts on pg session info (connections, queries, etc.) and host metrics (load, etc.).
+
 ## Requirements
 1. Linux, no windows pg server monitoring at the present time.
 2. mail utility (mailutils)

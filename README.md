@@ -66,6 +66,20 @@ In these examples, pg_alert will run for 60 minutes.
  
 ## Details
 This section gets into the nuances of pg_alert.
+
+### POSTGRESQL.CONF SETTINGS
+To gain the most analysis of the PG log file, these settings should be set in **postgresql.conf**. 
+* log_min_duration_statement = 5  # 0-whatever, that gets you visibility into the depth of the SQL you want to analyze.
+* log_checkpoints = on
+* log_connections = on
+* log_disconnections = on
+* log_lock_waits = on
+* log_statement = 'none'
+* log_temp_files = 0
+* log_autovacuum_min_duration = 2    # 0-whatever, that gets you visibility into the depth of the autovacuum processes you want to analyze.
+* log_line_prefix = '%m %u@%d[%p:%i] %r [%a]   %e tx:%x : '  # this is just a working example, compatible with pgbadger
+
+
 ### SQLSTATES
 The **SQLSTATES** configuration parameter is probably one of the most powerful filtering features of pg_alert.  Here you can filter out SQLSTATES and entire SQLCLASSES.  SQLCODES are reported in the postgresql log file as sqlstate. You can also specify a class to ignore based on official postgresql documentation:
 [PostgreSQL Error Codes](http://www.postgresql.org/docs/9.6/static/errcodes-appendix.html)

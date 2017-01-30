@@ -71,7 +71,7 @@ This section gets into the nuances of pg_alert.
 
 It's a good idea to configure it very restrictive at first (bigger GREP statement, application, user restrictions, sqlstate/sqlclass codes) so as not to generate a lot of emails at first.  Then pull back the filtering bit by bit until you get the right kind and amount of alerts that you can work with.
 
-pg_alert will temporarily suspend emails for a few minutes if too many alerts are triggered in a very short period of time.  You can modify pg_alert.conf and many changes will be picked up dynamically by a running pg_alert program every 5 minutes or so.  Thus if you get a lot of alerts, you can add more filtering to restrict alerts.
+pg_alert will temporarily suspend emails for a few minutes if too many alerts are triggered in a very short period of time.  You can modify pg_alert.conf and many changes will be picked up dynamically by a running pg_alert program every 5 minutes or so.  Thus if you get a lot of alerts, you can add more filtering to restrict alerts without having to stop and restart the program and its spawned tail process.
 
 
 ### POSTGRESQL.CONF SETTINGS

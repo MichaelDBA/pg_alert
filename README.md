@@ -77,7 +77,7 @@ To gain the most analysis of the PG log file, these settings should be set in **
 * log_statement = 'none'
 * log_temp_files = 0
 * log_autovacuum_min_duration = 2    # 0-whatever, that gets you visibility into the depth of the autovacuum processes you want to analyze.
-* log_line_prefix = '%m %u@%d[%p:%i] %r [%a]   %e tx:%x : '  # this is just a working example, compatible with pgbadger
+* ``log_line_prefix = '%m %u@%d[%p:%i] %r [%a]      %e tx:%x : '  # this is just a working example, compatible with pgbadger``
 
 
 ### SQLSTATES

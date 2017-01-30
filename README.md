@@ -36,7 +36,7 @@ The program generates 2 output files:
 2. mail utility (mailutils)
 3. python 2.7
 4. python packages: python-psutil, psycopg2
-5. PG Log file format that does not extent do time, i.e., hours, minutes, seconds.  
+5. PG Log file format that does not extent to time, i.e., hours, minutes, seconds.  
 log_filename='postgresql-%Y-%m-%d.log'
 <br/>
 log_filename='postgresql-%a.log'

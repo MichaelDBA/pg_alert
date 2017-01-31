@@ -130,6 +130,8 @@
 # 2017-01-11    Michael Vitale    More bug fixes.
 # 2017-01-21    Michael Vitale    More bug fixes. Added sytem check support: windows, packages, versions.
 # 2017-01-28    Michael Vitale    More bug fixes. Added ssmtp, smtp support for email options.
+# 2017-01-30    Michael Vitale    V 2.1: Enhancements. Changed connection logic: program does not abort if it cannot
+#                                 connect to the db. db checks are just disabled for this session.
 ################################################################################################################
 import string, sys, os, time, datetime, exceptions, socket, commands, argparse
 import random, math, signal, platform, glob, stat, imp
@@ -160,7 +162,7 @@ def get_lock(processname):
 
 class pgmon:
     def __init__(self):
-        self.version       = "pg_alert (V 2.0 Jan. 29, 2017)"
+        self.version       = "pg_alert (V 2.1 Jan. 31, 2017)"
         self.system         = platform.system()
         self.python_version = platform.python_version()
         self.description   = "%s is a PostgreSQL alerting tool" % self.version
@@ -263,6 +265,7 @@ class pgmon:
         
         self.suspended            = False
         self.bypass               = False
+        self.connected            = False
         
         
         # db stats ordered array: datname,numbackends,conflicts,temp_bytes,deadlocks
@@ -375,6 +378,51 @@ class pgmon:
             self.printit("Unsupported python version, %s.  Only 2.7.x are supported at the present time." % (self.python_version))
             return ERR
         return OK    
+
+    ##########################
+    def getdbinfo(self):
+           
+        # get some PG stuff
+        cur = self.conn.cursor()
+        sql = "select name, setting from pg_settings where name in ('data_directory','log_directory','log_filename','log_line_prefix','server_version','server_version_num' ) order by name"
+	try:
+	    cur.execute(sql)
+	except psycopg2.Error, e:
+            cur.close()
+	    self.printit("SQL Error: unable to retrieve PG Glucs: %s" % (e))
+	    self.cleanup(1)                
+
+        glucs = cur.fetchall()
+        if not glucs:
+            cur.close()
+	    self.printit("SQL Error: no glucs found.")
+	    self.cleanup(1)                        
+
+        for agluc in glucs:
+            if agluc[0] == 'data_directory':
+                self.data_directory = agluc[1]
+            elif agluc[0] == 'log_directory':
+                if self.pglog_directory == '':
+                    self.pglog_directory = agluc[1]
+                    if self.pglog_directory == 'pg_log':
+                        # need to preappend data dir
+                        self.pglog_directory = self.data_directory + '/' + self.pglog_directory
+            elif agluc[0] == 'log_line_prefix':
+                self.log_line_prefix = agluc[1]
+            elif agluc[0] == 'server_version':
+                self.server_version = agluc[1]
+            elif agluc[0] == 'server_version_num':
+                self.server_version_num = int(agluc[1])                
+            elif agluc[0] == 'log_filename':
+                self.log_filename = agluc[1]                                
+            else:
+                cur.close
+                self.printit("Program Error: Unexpected gluc: %s" % agluc[0])
+                self.cleanup(1)        
+                
+        self.pg_tmp = self.data_directory + '/base/pgsql_tmp'
+
+        return OK
 
     ##########################
     def initandvalidate(self):
@@ -505,67 +553,22 @@ class pgmon:
         connstr = "dbname=%s user=%s host=%s port=%s" % (self.dbname, self.dbuser, self.dbhost, self.pgport)
         try:
             self.conn = psycopg2.connect(connstr)
+            self.connected = True
+            self.conn.autocommit = True
         except psycopg2.Error as e:
+            now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                    
             self.printit("Database Connection Error: %s" % (e))
             self.printit("using connection string: %s" % connstr)
-            self.cleanup(1)                
-        self.conn.autocommit = True
+            
+            # v2.1 enhancement: do not abort if we cannot connect, just disable db checking stuff
+            self.printit("%s: NOTICE. DB session checks are disabled for this instance of pg_alert." % now)
+            self.connected = False
+            # self.cleanup(1)          
 
-        # get some PG stuff
-        cur = self.conn.cursor()
-        sql = "select name, setting from pg_settings where name in ('data_directory','log_directory','log_filename','log_line_prefix','server_version','server_version_num' ) order by name"
-	try:
-	    cur.execute(sql)
-	except psycopg2.Error, e:
-            cur.close()
-	    self.printit("SQL Error: unable to retrieve PG Glucs: %s" % (e))
-	    self.cleanup(1)                
-
-        glucs = cur.fetchall()
-        if not glucs:
-            cur.close()
-	    self.printit("SQL Error: no glucs found.")
-	    self.cleanup(1)                        
-
-        for agluc in glucs:
-            if agluc[0] == 'data_directory':
-                self.data_directory = agluc[1]
-            elif agluc[0] == 'log_directory':
-                if self.pglog_directory == '':
-                    self.pglog_directory = agluc[1]
-                    if self.pglog_directory == 'pg_log':
-                        # need to preappend data dir
-                        self.pglog_directory = self.data_directory + '/' + self.pglog_directory
-            elif agluc[0] == 'log_line_prefix':
-                self.log_line_prefix = agluc[1]
-            elif agluc[0] == 'server_version':
-                self.server_version = agluc[1]
-            elif agluc[0] == 'server_version_num':
-                self.server_version_num = int(agluc[1])                
-            elif agluc[0] == 'log_filename':
-                self.log_filename = agluc[1]                                
-            else:
-                cur.close
-                self.printit("Program Error: Unexpected gluc: %s" % agluc[0])
-                self.cleanup(1)        
-                
-        self.pg_tmp = self.data_directory + '/base/pgsql_tmp'
-                
-        '''
-        # get log_line_prefix
-	cur = self.conn.cursor()
-	sql = "show log_line_prefix"
-	try:
-	    cur.execute(sql)
-	except psycopg2.Error, e:
-	    self.printit("SQL Error: unable to retrieve log_line_prefix: %s" % (e))
-	    self.cleanup(1)                
-	
-	row = cur.fetchone()
-        self.log_line_prefix = row[0]
-	cur.close()
-        '''
-
+        if  self.connected:
+            rc = self.getdbinfo()
+            if rc <> OK:
+                self.cleanup(1)
         interim = config.get("required", "minutes",1)
         if interim == "":
             self.minutes = 0
@@ -641,7 +644,7 @@ class pgmon:
         self.grepfilter = config.get("optional", "grep",1)
         if self.grepfilter == '':
             pass
-        
+
         # put states and classes in arrays
         self.sqlstate   = config.get("optional", "sqlstate",1)
         if self.sqlstate.strip() <> '':
@@ -694,7 +697,7 @@ class pgmon:
 
         if self.from_ == "":
             self.from_ = "PostgreSQL Administrator <%s@%s>" % (self.dbuser, self.dbhost)
-        
+
         # parse log_filename to get the right PG log file to open.
         rc, log_filename = self.getlogfilename()
         if rc <> OK:
@@ -988,18 +991,18 @@ class pgmon:
         
         body = message
         msg.attach(MIMEText(body, 'plain'))
-
+        step = ''
         try:
-            prepend = "smtplib.SMTP"
+            step = "smtplib.SMTP"
             server = smtplib.SMTP(smtp_server, smtp_port)
             if self.verbose:
                 server.set_debuglevel(1)    
-            prepend = "starttls"            
+            step = "starttls"            
             server.starttls()
-            prepend = "login"            
+            step = "login"            
             server.login(fromaddr, smtp_password)
             text = msg.as_string()
-            prepend = "sendmail"            
+            step = "sendmail"            
             server.sendmail(fromaddr, toaddr, text)
             server.quit()
 
@@ -1033,14 +1036,12 @@ class pgmon:
             exceptiontype = "GENERAL SMTP Exception"
 
         if exceptiontype <> '':
-            prepend = step
-
-            amsg = "%s Error: %s" % (prepend, exceptiontype)
+            amsg = "%s Error: %s" % (step, exceptiontype)
             self.printit("SMTP Send Error: %s" % amsg)
             self.printit("SMTP Error Details: TO:%s\nFROM:%s]nSUBJECT:%s\nTEXT:%s" % (fromaddr, toaddr, msg['Subject'], text))
             return ERR
         else:
-            amsg = "%s Error: %s" % (prepend, 'UNKNOWN EXCEPTION')
+            amsg = "%s Error: %s" % (step, 'UNKNOWN EXCEPTION')
             self.printit("SMTP Send Error: %s" % amsg)
             self.printit("SMTP Error Details: TO:%s\nFROM:%s]nSUBJECT:%s\nTEXT:%s" % (fromaddr, toaddr, msg['Subject'], text))
             return ERR        
@@ -1208,8 +1209,8 @@ class pgmon:
                 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                    
                 self.printit("%s: VERBOSE: could not find beginning of sqlstate, *%s*, in msg, %s\n" % (now, self.sqlstateprefix, msg))
             return ""
-
         s1 = msg[pos+len(self.sqlstateprefix):]            
+        # print "DEBUG1: pos=%d prefix=%s s1=%s" % (pos,self.sqlstateprefix, s1)
         pos = s1.find(self.sqlstatepostfix)
         if pos < 0:
             if self.verbose:
@@ -1217,7 +1218,12 @@ class pgmon:
                 self.printit("%s: VERBOSE: could not find end of sqlstate in msg, %s\n" % (now, msg))        
             return ""
         s1 = s1[0:pos]
+        # print "DEBUG2: s1=%s" % s1
         s1 = s1.strip()
+        # v2.1 enhancement: turn off sqlchecking if log_line_prefix is not setup up correctly resulting in an sqlstate that is not alphanumeric
+        if not s1.isalnum():
+            self.check_sqlstate = False
+            self.printit("%s: Invalid sqlstate found: %s.  SQLSTATE checking is disabled. Fix log_line_prefix so SQLSTATE can be found correctly next time.\n" % (now, s1))        
         if s1 == '00000':
             return s1
         else:
@@ -1800,27 +1806,33 @@ class pgmon:
             self.refreshed = time.time()
             if rc <> 0:
                 return rc;        
-            
-        rc = self.checkdbstats()
-        if rc <> 0:
-            return rc;        
+        if self.connected:
+            rc = self.checkdbstats()
+            if rc <> 0:
+                return rc;        
             
         rc = self.checklinux()
         if rc <> 0:
             return rc;
 
-        rc = self.checkconnections()
-        if rc <> 0:
-            return rc;        
+        if self.connected:
+            rc = self.checkconnections()
+            if rc <> 0:
+                return rc;        
 
-        rc = self.checkslaves()
-        if rc <> 0:
-            return rc;                    
+        if self.connected:
+            rc = self.checkslaves()
+            if rc <> 0:
+                return rc;                    
 
         if self.verbose:
             now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                    
-            msg = "%s: VERBOSE: cpus(%d)  load1min(%.2f)  Load5min(%.2f)  Load15min(%.2f) loadthreshold(%d%%) loadmax(%.2f) maxconn=%d  totalconn=%d  activeconn=%d\n" \
-                  % (now, self.cpus, self.load1, self.load5, self.load15, self.loadthreshold, self.loadmax, self.maxconn, self.totalconn, self.activeconn)
+            if self.connected:
+                msg = "%s: VERBOSE: cpus(%d)  load1min(%.2f)  Load5min(%.2f)  Load15min(%.2f) loadthreshold(%d%%) loadmax(%.2f) maxconn=%d  totalconn=%d  activeconn=%d\n" \
+                      % (now, self.cpus, self.load1, self.load5, self.load15, self.loadthreshold, self.loadmax, self.maxconn, self.totalconn, self.activeconn)
+            else:
+                msg = "%s: VERBOSE: cpus(%d)  load1min(%.2f)  Load5min(%.2f)  Load15min(%.2f) loadthreshold(%d%%) loadmax(%.2f)  DB info not available.\n" \
+                      % (now, self.cpus, self.load1, self.load5, self.load15, self.loadthreshold, self.loadmax)            
             self.printit(msg)        
 
         return OK

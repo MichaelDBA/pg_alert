@@ -992,6 +992,7 @@ class pgmon:
         body = message
         msg.attach(MIMEText(body, 'plain'))
         step = ''
+        text = ''
         try:
             step = "smtplib.SMTP"
             server = smtplib.SMTP(smtp_server, smtp_port)

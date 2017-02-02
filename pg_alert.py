@@ -130,8 +130,9 @@
 # 2017-01-11    Michael Vitale    More bug fixes.
 # 2017-01-21    Michael Vitale    More bug fixes. Added sytem check support: windows, packages, versions.
 # 2017-01-28    Michael Vitale    More bug fixes. Added ssmtp, smtp support for email options.
-# 2017-01-30    Michael Vitale    V 2.1: Enhancements. Changed connection logic: program does not abort if it cannot
+# 2017-02-01    Michael Vitale    V 2.1: Enhancements. Changed connection logic: program does not abort if it cannot
 #                                 connect to the db. db checks are just disabled for this session.
+#                                 New logic uses pids instead of sockets for avoiding duplicate instances.
 ################################################################################################################
 import string, sys, os, time, datetime, exceptions, socket, commands, argparse
 import random, math, signal, platform, glob, stat, imp
@@ -150,19 +151,25 @@ NOTFOUND = -1
 INTERRUPT = -2
 NOPROGLOCK = -3
 
+
 ########################
 def get_lock(processname):
     get_lock._lock_socket = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+    # get_lock._lock_socket = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+    get_lock._lock_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
         get_lock._lock_socket.bind('\0' + processname)
-    except socket.error:
-        p.printit('Lock exists. Program is already running. Exiting...')
+        sock.bind(server_address)
+        p.printit("socket: %s" % sock.getsockname())
+    except socket.error, msg:
+        # p.printit('Lock exists (%s) %s. Program is already running. Exiting...' % (p.processname, sock.getsockname()))
+        p.printit('Lock exists (%s) Error=%s.  Program is already running. Exiting...' % (p.processname, msg))
         return NOPROGLOCK
     return OK
 
 class pgmon:
     def __init__(self):
-        self.version       = "pg_alert (V 2.1 Jan. 31, 2017)"
+        self.version       = "pg_alert (V 2.1 Feb. 01, 2017)"
         self.system         = platform.system()
         self.python_version = platform.python_version()
         self.description   = "%s is a PostgreSQL alerting tool" % self.version
@@ -270,6 +277,22 @@ class pgmon:
         
         # db stats ordered array: datname,numbackends,conflicts,temp_bytes,deadlocks
         self.dbstats = []
+
+    ########################
+    def get_pidlock(self):
+        pid = str(os.getpid())
+        self.pidfile = "/tmp/%s.pid" % self.processname
+
+        if os.path.isfile(self.pidfile):
+            self.printit('Pid file exists (%s).  Program is already running. Exiting...' % (self.pidfile))            
+            return NOPROGLOCK
+        
+        try:
+            file(self.pidfile, 'w').write(pid)
+        except Exception as e:
+            self.printit('Unable to obtain pid lock (%s)' % (e))            
+            return NOPROGLOCK
+        return OK
 
     ##########################
     def setupOptionParser(self):
@@ -426,6 +449,10 @@ class pgmon:
 
     ##########################
     def initandvalidate(self):
+
+        rc = self.get_pidlock()
+        if rc <> OK:
+            sys.exit(rc)
 
         rc = self.checksystem()
         if rc <> OK:
@@ -1901,9 +1928,10 @@ class pgmon:
             self.alert.close()
         if self.conn is not None:
             self.conn.close()
-    
+
         if rc <> NOPROGLOCK:
             rc2 = self.terminatetail()
+            os.unlink(self.pidfile)
         
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                    
         self.printit("%s: pg_alert ended." % now)
@@ -1927,9 +1955,10 @@ rc = p.initandvalidate()
 if rc <> 0:
     p.cleanup(1)    
 
-rc = get_lock(p.processname)
-if rc <> 0:
-    p.cleanup(rc)    
+# deprecated call
+# rc = get_lock(p.processname)
+# if rc <> 0:
+#     p.cleanup(rc)    
 
 p.showparms()
 
@@ -1997,8 +2026,8 @@ while True:
             # restart the buffer timer
             buffstart = time.time()
             buffcnt   = 0
-    
-        where = p.alert.tell()
+
+	where = p.alert.tell()
         line = p.alert.readline()
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")    
         if not line:
@@ -2013,8 +2042,8 @@ while True:
                 if rc <> 0:
                     p.printit("Errors encountered.  Program will abort.")
                     p.cleanup(1)    
-            
-            time_now = time.time()
+
+           time_now = time.time()
             time_delta = round(time_now - p.time_start)
             if time_delta > p.seconds:
                 if not tailfinished:

@@ -24,7 +24,7 @@
 ### AND SQLEXEC LLC HAS NO OBLIGATIONS TO PROVIDE MAINTENANCE, SUPPORT, UPDATES,
 ### ENHANCEMENTS, OR MODIFICATIONS.
 ###
-###############################################################################
+#######################################G########################################
 # Original Author: Michael Vitale, michael@sqlexec.com
 #
 # Description: pg_alert.py is a PG monitoring script that sends email alerts based on 
@@ -169,7 +169,7 @@ def get_lock(processname):
 
 class pgmon:
     def __init__(self):
-        self.version       = "pg_alert (V 2.1 Feb. 01, 2017)"
+        self.version       = "pg_alert (V 2.1 Feb. 07, 2017)"
         self.system         = platform.system()
         self.python_version = platform.python_version()
         self.description   = "%s is a PostgreSQL alerting tool" % self.version
@@ -449,10 +449,6 @@ class pgmon:
 
     ##########################
     def initandvalidate(self):
-
-        rc = self.get_pidlock()
-        if rc <> OK:
-            sys.exit(rc)
 
         rc = self.checksystem()
         if rc <> OK:
@@ -736,6 +732,10 @@ class pgmon:
         self.logalert     = "%s/alerts-%s.log" % (self.alert_directory,self.filedatefmt)
         self.loghistory   = "%s/alerts-history-%s.log" % (self.alert_directory,self.filedatefmt)
 
+        rc = self.get_pidlock()
+        if rc <> OK:
+            self.cleanup(1)                
+            
         # remove alert file if exists and clear out history file as well
         cmd = "echo '' > %s" % (self.logalert)
         rc,out,errs = self.executecmd(cmd,False)
@@ -1928,9 +1928,10 @@ class pgmon:
             self.alert.close()
         if self.conn is not None:
             self.conn.close()
-
+    
         if rc <> NOPROGLOCK:
             rc2 = self.terminatetail()
+            self.printit("%s: removing pidfile, %s" % (now,self.pidfile))
             os.unlink(self.pidfile)
         
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                    
@@ -2026,8 +2027,8 @@ while True:
             # restart the buffer timer
             buffstart = time.time()
             buffcnt   = 0
-
-	where = p.alert.tell()
+    
+        where = p.alert.tell()
         line = p.alert.readline()
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")    
         if not line:
@@ -2042,8 +2043,8 @@ while True:
                 if rc <> 0:
                     p.printit("Errors encountered.  Program will abort.")
                     p.cleanup(1)    
-
-           time_now = time.time()
+            
+            time_now = time.time()
             time_delta = round(time_now - p.time_start)
             if time_delta > p.seconds:
                 if not tailfinished:

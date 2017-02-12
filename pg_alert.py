@@ -735,7 +735,7 @@ class pgmon:
 
         rc = self.get_pidlock()
         if rc <> OK:
-            self.cleanup(1)                
+            self.cleanup(rc)                
             
         # remove alert file if exists and clear out history file as well
         cmd = "echo '' > %s" % (self.logalert)
@@ -1936,8 +1936,12 @@ class pgmon:
         if rc <> NOPROGLOCK:
             rc2 = self.terminatetail()
             self.printit("%s: removing pidfile, %s" % (now,self.pidfile))
-            os.unlink(self.pidfile)
-        
+            try:
+                os.unlink(self.pidfile)
+            except OSError, e:
+                self.printit("%s: OSError attempting to remove pidfile, %s. %s" % (now,self.pidfile, e))
+            except e:
+                self.printit("%s: Unknown exception trying to remove pid file, %s.  %s" % (now, self.pidfile, e))
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                    
         self.printit("%s: pg_alert ended." % now)
         sys.exit(rc)

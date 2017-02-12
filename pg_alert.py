@@ -169,7 +169,7 @@ def get_lock(processname):
 
 class pgmon:
     def __init__(self):
-        self.version       = "pg_alert (V 2.1 Feb. 07, 2017)"
+        self.version       = "pg_alert (V 2.1 Feb. 12, 2017)"
         self.system         = platform.system()
         self.python_version = platform.python_version()
         self.description   = "%s is a PostgreSQL alerting tool" % self.version
@@ -517,8 +517,9 @@ class pgmon:
         if self.smtp_port.isdigit():
             self.smtp_port = int(self.smtp_port)
         else:
-            self.printit("SMTP_PORT must be a number: %s" % self.smtp_port)
-            sys.exit(ERR)
+            if self.mail_method == 'smtp':
+                self.printit("SMTP_PORT must be a number: %s" % self.smtp_port)
+                sys.exit(ERR)
         self.smtp_password = config.get('optional', 'smtp_password')
         self.sms           = config.get('optional', 'sms')
         
@@ -949,7 +950,10 @@ class pgmon:
         cmd = 'echo "%s" >> %s' % (message, self.loghistory)
         rc = subprocess.call(cmd, shell=True)  
         if rc <> 0:
-            print "Unable to print message (%s). subprocess.call error return code = %d" % (message,rc)
+            msg = "Unable to print message (%s). subprocess.call error return code = %d" % (message,rc)
+            print msg
+            sysmsg = "cat %s > %s\n" % (msg,self.loghistory)
+            os.system(sysmgs)
             self.cleanup(1)                
         else:
             return OK
@@ -2068,4 +2072,3 @@ while True:
 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")    
 p.printit("%s: Daily Monitoring ending. %d alert(s) detected." % (now, p.alertcnt))
 p.cleanup(0)
- 

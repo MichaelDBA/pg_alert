@@ -133,6 +133,7 @@
 # 2017-02-01    Michael Vitale    V 2.1: Enhancements. Changed connection logic: program does not abort if it cannot
 #                                 connect to the db. db checks are just disabled for this session.
 #                                 New logic uses pids instead of sockets for avoiding duplicate instances.
+#                                 Return details of idle in transactions instead of just the counts.
 ################################################################################################################
 import string, sys, os, time, datetime, exceptions, socket, commands, argparse
 import random, math, signal, platform, glob, stat, imp
@@ -169,7 +170,7 @@ def get_lock(processname):
 
 class pgmon:
     def __init__(self):
-        self.version       = "pg_alert (V 2.1 Feb. 12, 2017)"
+        self.version       = "pg_alert (V 2.1 Feb. 15, 2017)"
         self.system         = platform.system()
         self.python_version = platform.python_version()
         self.description   = "%s is a PostgreSQL alerting tool" % self.version
@@ -1621,19 +1622,41 @@ class pgmon:
         
         # check for long running idle in transactions
         cur = self.conn.cursor()
-        sql = "select count(*) from pg_stat_activity where state = \'idle in transaction\' and round(EXTRACT(EPOCH FROM (now() - query_start))) > %d" \
-              % self.idletransthreshold
+        sql = "select pid, datname, usename, state, coalesce(application_name,' ') as application_name, client_addr, round(EXTRACT(EPOCH FROM (now() - query_start))) as seconds, " \
+              "substring(query,1,9999) as query from pg_stat_activity where state = 'idle in transaction' and " \
+              "round(EXTRACT(EPOCH FROM (now() - query_start))) > %d" % (self.idletransthreshold)
+        if self.verbose:
+            self.printit("%s: VERBOSE: idle in transaction query check: %s\n" % (now,sql))
 	try:
 	    cur.execute(sql)
 	except psycopg2.Error, e:
-	    self.printit("SQL Error: unable to retrieve long idle in transaction count: %s" % (e))
+	    self.printit("SQL Error: unable to retrieve idle in transaction transaction count: %s" % (e))
 	    return ERR
 	
-	row = cur.fetchone()
-        if  row[0] > 0:
-            if self.lastconnidlealert is None or int(timenow - self.lastconnidlealert) > self.checkinterval:        
-                msg = "%s: %d idle in transactions longer than %d seconds detected." % (now,row[0], self.idletransthreshold)
+	rows = cur.fetchall()
+	rowcnt = cur.rowcount
+	if rowcnt > 0 and (self.lastconnidlealert is not None and int(timenow - self.lastconnidlealert) < self.checkinterval):        
+	    # bypass alerting
+            pass
+	else:
+	    results = ''
+            if rows:
                 self.lastconnidlealert = time.time()
+                for arow in rows:
+                    pid              = arow[0]
+                    datname          = arow[1]
+                    usename          = arow[2]
+                    state            = arow[3]
+                    application_name = arow[4]
+                    client_addr      = arow[5]
+                    if len(application_name.strip()) == 0:
+                        application_name = 'n/a'
+                    seconds          = arow[6]
+                    query            = arow[7]
+                    rowvalues = "pid=%d db=%s user=%s seconds=%d app=%s client_addr=%s seconds=%d \n\nquery=%s\n\n" % \
+                                (pid, datname, usename, seconds, application_name, client_addr, seconds, query)
+                    results = results + rowvalues
+                msg = "%s: %d idle in transaction transactions longer than %d seconds detected.\n%s" % (now,rowcnt, self.idletransthreshold, results)
                 self.sendalert(msg)        
         cur.close()
 

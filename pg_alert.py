@@ -130,7 +130,7 @@
 # 2017-01-11    Michael Vitale    More bug fixes.
 # 2017-01-21    Michael Vitale    More bug fixes. Added sytem check support: windows, packages, versions.
 # 2017-01-28    Michael Vitale    More bug fixes. Added ssmtp, smtp support for email options.
-# 2017-02-01    Michael Vitale    V 2.1: Enhancements. Changed connection logic: program does not abort if it cannot
+# 2017-02-01-28 Michael Vitale    V 2.1: Enhancements. Changed connection logic: program does not abort if it cannot
 #                                 connect to the db. db checks are just disabled for this session.
 #                                 New logic uses pids instead of sockets for avoiding duplicate instances.
 #                                 Return details of idle in transactions instead of just the counts.
@@ -170,7 +170,7 @@ def get_lock(processname):
 
 class pgmon:
     def __init__(self):
-        self.version       = "pg_alert (V 2.1 Feb. 15, 2017)"
+        self.version       = "pg_alert (V 2.1 Feb. 28, 2017)"
         self.system         = platform.system()
         self.python_version = platform.python_version()
         self.description   = "%s is a PostgreSQL alerting tool" % self.version
@@ -1837,11 +1837,18 @@ class pgmon:
                 
         loadthreshold = round(.01 * float(self.loadthreshold), 2)
         self.loadmax = float(round(loadthreshold * self.cpus,2))
+        loadpct1  = round(self.load1  / self.cpus,4) * 100
+        loadpct5  = round(self.load5  / self.cpus,4) * 100
+        loadpct15 = round(self.load15 / self.cpus,4) * 100        
+        actualmax = max(loadpct1, loadpct5, loadpct15)
+        
+        # print "load1=%.2f pct=%.2f load5=%.2f pct=%.2f load15=%.2f pct=%.2f loadmax=%.2f  maxpct load=%.2f" \
+        #       % (self.load1, loadpct1, self.load5, loadpct5, self.load15, loadpct15, self.loadmax, actualmax)
 
         if self.load1 > self.loadmax or self.load5 > self.loadmax or self.load15 > self.loadmax:
             if self.lastloadalert is None or int(timenow - self.lastloadalert) > self.checkinterval:
-                msg = "%d%% load exceeded (%.2f) exceeded. cpus(%d) load1min(%.2f) load5min(%.2f) load15min(%.2f)" \
-                      % (self.loadthreshold, self.loadmax, self.cpus, self.load1, self.load5, self.load15)
+                msg = "%d%% load threshold exceeded (%.2f) exceeded. cpus(%d) load1min(%.2f) load5min(%.2f) load15min(%.2f)" \
+                      % (self.loadthreshold, actualmax, self.cpus, self.load1, self.load5, self.load15)
                 self.lastloadalert = time.time()
                 self.sendalert(msg)             
         

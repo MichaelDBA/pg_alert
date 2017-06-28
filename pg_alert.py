@@ -130,7 +130,7 @@
 # 2017-01-11    Michael Vitale    More bug fixes.
 # 2017-01-21    Michael Vitale    More bug fixes. Added sytem check support: windows, packages, versions.
 # 2017-01-28    Michael Vitale    More bug fixes. Added ssmtp, smtp support for email options.
-# 2017-02-01-28 Michael Vitale    V 2.1: Enhancements. Changed connection logic: program does not abort if it cannot
+# 2017-02-01    Michael Vitale    V 2.1: Enhancements. Changed connection logic: program does not abort if it cannot
 #                                 connect to the db. db checks are just disabled for this session.
 #                                 New logic uses pids instead of sockets for avoiding duplicate instances.
 #                                 Return details of idle in transactions instead of just the counts.
@@ -168,6 +168,24 @@ def get_lock(processname):
         return NOPROGLOCK
     return OK
 
+########################
+def which(program):
+    def is_exe(fpath):
+        return os.path.isfile(fpath) and os.access(fpath, os.X_OK)
+
+    fpath, fname = os.path.split(program)
+    if fpath:
+        if is_exe(program):
+            return program
+    else:
+        for path in os.environ["PATH"].split(os.pathsep):
+            path = path.strip('"')
+            exe_file = os.path.join(path, program)
+            if is_exe(exe_file):
+                return exe_file
+    return ''
+
+
 class pgmon:
     def __init__(self):
         self.version       = "pg_alert (V 2.1 Feb. 28, 2017)"
@@ -178,6 +196,7 @@ class pgmon:
         self.args          = 0
         self.filedatefmt   = datetime.datetime.now().strftime("%Y-%m%d")    
         self.mail_method   = ""
+        self.mailx_format  = "default"
         self.mailbin       = 'mail'
 
         # SMTP STUFF
@@ -400,7 +419,8 @@ class pgmon:
         # we only support python 2.7 flavors      
         if self.python_version[0:3] <> '2.7':
             self.printit("Unsupported python version, %s.  Only 2.7.x are supported at the present time." % (self.python_version))
-            return ERR
+            # return ERR
+            return OK
         return OK    
 
     ##########################
@@ -511,6 +531,10 @@ class pgmon:
                 sys.exit(ERR)
 
         self.mail_method   = config.get('optional', 'mail_method').lower()
+        self.mailx_format  = config.get('optional', 'mailx_format').lower()
+        if self.mailx_format <> 'default' and self.mailx_format <> 'ec2':
+            self.printit("Invalid MAILX_FORMAT=%s.  Must be one of: default, ec2" % self.mailx_format)
+            sys.exit(ERR)        
         
         self.smtp_server   = config.get('optional', 'smtp_server')
         self.smtp_account  = config.get('optional', 'smtp_account')
@@ -537,11 +561,17 @@ class pgmon:
                 sys.exit(ERR)
         elif self.mail_method == 'mail':
             # see if we can use bsd version of mailx to avoid syntax problems with heirloom version
-            rc = self.testcmd('/usr/bin/bsd-mailx')
+            result = which('mailx')
+            if result == '':
+                self.printit("mailx program not found.  Please install mailx or use another mail method.")
+                sys.exit(ERR) 
+            rc = self.testcmd(result)    
             if rc == OK:
-                self.mailbin ='/usr/bin/bsd-mailx'
-        
-        
+                self.mailbin = result
+            # rc = self.testcmd('/usr/bin/bsd-mailx')
+            #if rc == OK:
+            #    self.mailbin ='/usr/bin/bsd-mailx'
+
         self.ignore_autovacdaemon = config.getboolean('optional', 'ignore_autovacdaemon')
         self.ignore_uservac       = config.getboolean('optional', 'ignore_uservac')
         self.monitorlag = config.getboolean('optional', 'monitorlag')
@@ -1085,11 +1115,22 @@ class pgmon:
             return OK
     
         if self.mail_method == 'mail':
+            # debian syntax that works:
             # echo "This is the message body" | mail -s "This is the subject" michael.vitale@assurant.com -a "From: xxx@xxx.commail.tld"
+            #
+            # on ec2 redhat, this is the syntax that works:
+            #echo "This is the message body" | mail -s "This is the subject11" michael.vitale@datavail.com
+            
             subject = self.subject + ' (' + self.clusterid + ')'
-            cmd = 'echo "%s" | %s -s "%s" %s -a "From: %s"' % (msg, self.mailbin, subject, self.to, self.from_)
+            if self.mailx_format == 'default':
+                cmd = 'echo "%s" | %s -s "%s" %s -a "From: %s"' % (msg, self.mailbin, subject, self.to, self.from_)
+            elif self.mailx_format == 'ec2':
+                cmd = 'echo "%s" | %s -s "%s" %s' % (msg, self.mailbin, subject, self.to)
+            
             rc,out,errs = self.executecmd(cmd,False)
+            # NOTE: mailx errors are not caught with executecmd. Return is always 0
             if rc <> 0:
+                self.printit("MAILX Error: %d *%s* *%s*" % (rc, out, errs))
                 return ERR;
         elif self.mail_method == 'ssmtp':                
             # ssmtp protocol
@@ -1234,6 +1275,7 @@ class pgmon:
 
     ########################
     def getSqlstate(self, msg):
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S") 
         # This is a bad prefix since the prefix occurs multiple times with the second one being the correct one.
         # '%m %u@%d[%p: %i ] %r [%a] %e tx:%x : '
         pos = msg.find(self.sqlstateprefix)
@@ -1987,6 +2029,7 @@ class pgmon:
 ######### MAIN ENTRY POINT ##########
 #####################################
 
+
 # get the class instantiation
 p = pgmon()
 
@@ -2106,3 +2149,4 @@ while True:
 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")    
 p.printit("%s: Daily Monitoring ending. %d alert(s) detected." % (now, p.alertcnt))
 p.cleanup(0)
+

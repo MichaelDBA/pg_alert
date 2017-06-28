@@ -134,6 +134,7 @@
 #                                 connect to the db. db checks are just disabled for this session.
 #                                 New logic uses pids instead of sockets for avoiding duplicate instances.
 #                                 Return details of idle in transactions instead of just the counts.
+# 2017-06-28    Michael Vitale    V 2.2: Enhancements. Added new parmeter to dicate mailx format options, MAILX_FORMAT
 ################################################################################################################
 import string, sys, os, time, datetime, exceptions, socket, commands, argparse
 import random, math, signal, platform, glob, stat, imp
@@ -188,7 +189,7 @@ def which(program):
 
 class pgmon:
     def __init__(self):
-        self.version       = "pg_alert (V 2.1 Feb. 28, 2017)"
+        self.version       = "pg_alert (V 2.2 Jun. 28, 2017)"
         self.system         = platform.system()
         self.python_version = platform.python_version()
         self.description   = "%s is a PostgreSQL alerting tool" % self.version
@@ -531,6 +532,7 @@ class pgmon:
                 sys.exit(ERR)
 
         self.mail_method   = config.get('optional', 'mail_method').lower()
+        # new parameter for v2.2
         self.mailx_format  = config.get('optional', 'mailx_format').lower()
         if self.mailx_format <> 'default' and self.mailx_format <> 'ec2':
             self.printit("Invalid MAILX_FORMAT=%s.  Must be one of: default, ec2" % self.mailx_format)
@@ -1122,6 +1124,7 @@ class pgmon:
             #echo "This is the message body" | mail -s "This is the subject11" michael.vitale@datavail.com
             
             subject = self.subject + ' (' + self.clusterid + ')'
+            # new parameter logic for v2.2
             if self.mailx_format == 'default':
                 cmd = 'echo "%s" | %s -s "%s" %s -a "From: %s"' % (msg, self.mailbin, subject, self.to, self.from_)
             elif self.mailx_format == 'ec2':

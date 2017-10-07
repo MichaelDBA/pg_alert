@@ -134,7 +134,8 @@
 #                                 connect to the db. db checks are just disabled for this session.
 #                                 New logic uses pids instead of sockets for avoiding duplicate instances.
 #                                 Return details of idle in transactions instead of just the counts.
-# 2017-06-28    Michael Vitale    V 2.2: Enhancements. Added new parmeter to dicate mailx format options, MAILX_FORMAT
+# 2017-06-28    Michael Vitale    V 2.2: Enhancements. Added new parmeter to dictate mailx format options, MAILX_FORMAT
+# 2017-10-07    Michael Vitale    V 2.3: Fix for latest version of PG, v10.
 ################################################################################################################
 import string, sys, os, time, datetime, exceptions, socket, commands, argparse
 import random, math, signal, platform, glob, stat, imp
@@ -211,6 +212,7 @@ class pgmon:
         self.logfile       = ""
         self.logalert      = ""
         self.loghistory    = ""
+        self.pidfile       = ""
         self.sendemail     = False
         self.ignore_autovacdaemon = True
         self.ignore_uservac = True
@@ -345,13 +347,19 @@ class pgmon:
         return OK, filename        
 
     ##########################
-    def testcmd (self, cmd):
+    def testcmd (self, cmd, context):
         command = "which %s" % cmd
         try: 
-            subprocess.check_output(command,shell=True)
+            if self.python_version[0:3] == '2.7':
+                subprocess.check_output(command,shell=True)
+            else:
+                pass
+                # proc = Popen(['ls', '-l'], stdout=PIPE)
+                # print(proc.communicate()[0].split())
             return OK
-        except: 
-            self.printit("ERROR: executable (%s) not found. Make sure %s is installed and in your path." % (cmd, cmd))
+        # except: 
+        except Exception as e:
+            self.printit("ERROR: execution error= %s  %s  %s" % (cmd, context, e))
             return ERR
 
     ##########################
@@ -419,7 +427,7 @@ class pgmon:
         
         # we only support python 2.7 flavors      
         if self.python_version[0:3] <> '2.7':
-            self.printit("Unsupported python version, %s.  Only 2.7.x are supported at the present time." % (self.python_version))
+            self.printit("Unsupported python version, %s.  Only 2.7.x are supported at the present time.  Some important functionality may not work correctly." % (self.python_version))
             # return ERR
             return OK
         return OK    
@@ -447,11 +455,13 @@ class pgmon:
             if agluc[0] == 'data_directory':
                 self.data_directory = agluc[1]
             elif agluc[0] == 'log_directory':
+                print 'DEBUG: log dir = %s' % agluc[1]
                 if self.pglog_directory == '':
                     self.pglog_directory = agluc[1]
-                    if self.pglog_directory == 'pg_log':
+                    if self.pglog_directory == 'pg_log' or self.pglog_directory == 'log':
                         # need to preappend data dir
                         self.pglog_directory = self.data_directory + '/' + self.pglog_directory
+                print 'DEBUG: complete log dir = %s' % self.pglog_directory
             elif agluc[0] == 'log_line_prefix':
                 self.log_line_prefix = agluc[1]
             elif agluc[0] == 'server_version':
@@ -558,7 +568,7 @@ class pgmon:
             sys.exit(ERR)                
 
         if self.mail_method == 'ssmtp':
-            rc = self.testcmd('ssmtp')
+            rc = self.testcmd('ssmtp', 'ssmtp test')
             if rc <> OK:
                 sys.exit(ERR)
         elif self.mail_method == 'mail':
@@ -567,7 +577,7 @@ class pgmon:
             if result == '':
                 self.printit("mailx program not found.  Please install mailx or use another mail method.")
                 sys.exit(ERR) 
-            rc = self.testcmd(result)    
+            rc = self.testcmd(result, 'mailx test')    
             if rc == OK:
                 self.mailbin = result
             # rc = self.testcmd('/usr/bin/bsd-mailx')
@@ -1300,6 +1310,7 @@ class pgmon:
         s1 = s1.strip()
         # v2.1 enhancement: turn off sqlchecking if log_line_prefix is not setup up correctly resulting in an sqlstate that is not alphanumeric
         if not s1.isalnum():
+            # Invalid sqlstate found: 07:16:00.054 EDT [25932]
             self.check_sqlstate = False
             self.printit("%s: Invalid sqlstate found: %s.  SQLSTATE checking is disabled. Fix log_line_prefix so SQLSTATE can be found correctly next time.\n" % (now, s1))        
         if s1 == '00000':

@@ -30,87 +30,7 @@
 # Description: pg_alert.py is a PG monitoring script that sends email alerts based on 
 #              monitored elements in a log file, host metrics, or db queries.
 #
-# Assumptions and Restrictions:
-#   1. linux distros only, no windows
-#   2. python 2.7.x only
-#   3. Tested with python 2.7.3 and PostgreSQL 9.4.10
-#   4. psycopg must be installed (apt-get install python-psycopg2)
-#   5. psutil must be installed (apt-get install python-psutil)
-#   6. PG log file prefix must start with timestamp.
-#   7. grep filter is valid in configuation file, no checking
-#   8. user,password,dbname in .pgpass
-#   9. Provides filtering on sqlstate if specified in log_line_prefix and pg_alert.conf file.
-#      example: log_line_prefix = '%m %u@%d[%p: %i ] %r [%a]   %e tx:%x : '
-#  10. only get one line, the line with ERROR on it, and not get subsequent lines that might be related.
-#  11. PG log file must be defined as a day type log file, postgresql-Wednesday.log, postgresql-2016-1122.log, postgresql-2016-11-22.log
-#      It will not work with hour, minute, or second specifiers, since it is based on grepping a pg log file persistent for one day.
-#  12. sysstat, lvm2 packages must be installed so iostat, lvdisplay commands are available.
-#  13. pip install sh to use sh import module, which is not used at the present time
-#  14. multiple instances on same host not supported.
-#
-# Input:
-#    * config file (-c --configfile), required input specifying configuration file for pg_alert
-#
-#    The following command line parameters override configuration specifications:
-#    * time in minutes (-m --minutes), specifies how long to run the tail
-#    * db name (-d --dbname), specified database name
-#    * db user (-u --dbuser), specified db user
-#    * dbhost  (-s --dbhost), specifies machine host name
-#    * verbose (-v --verbose), specifies logging verbosity
-#
-# example call:
-# /var/lib/postgresql/scripts/pg_alert.py -m 1439 -c /var/lib/postgresql/scripts/pg_alert.conf
-#
-# Cron Job Info:
-#    start the cron at midnight and run to 23:59
-#    00 00 * * * /var/lib/postgresql/scripts/pg_alert.py -m 1439 -c /var/lib/postgresql/scripts/pg_alert.conf
-#    00 00 * * * python /var/lib/postgresql/scripts/pg_alert.pyc -m 1439 -c /var/lib/postgresql/scripts/pg_alert.conf
-#
-#    start cron at 8am and run for 12 hours to 8pm: 
-#    00 08 * * * /var/lib/postgresql/scripts/pg_alert.py -m 720 -c /var/lib/postgresql/scripts/pg_alert.conf
-#
-#    View cron job output: view /var/log/cron
-#
-# NOTES:
-#   1. email status can be viewed here: /var/log/exim4/mainlog
-#   2. You may need to source the environment variables file in the crontab to get this program to work.
-#          #!/bin/bash
-#          source /home/user/.bash_profile
-#      OR create a bash script and invoke it from there:
-#          export PATH=/usr/lib64/qt-3.3/bin:/usr/local/bin:/bin:/usr/bin:/usr/local/sbin:/usr/sbin:/sbin
-#          cd /localhost/home/postgres/pgalert
-#          ./pg_alert.py  -d -c /localhost/home/postgres/pgalert -l /localhost/home/postgres/pgalert
-#          exit 0
-#   3. Compile script:
-#      >>> import py_compile;py_compile.compile('pg_alert.py')
-#      Then invoke it with python interpreter:
-#      python pg_alert.pyc
-#      Then run like this:
-#      python /var/lib/postgresql/scripts/pg_alert.pyc -m 1 -c /var/lib/postgresql/scripts/pg_alert.conf
-#
-#   4. Create python source distribution package for pg_alert: Assumes setup.py is already created for pg_alert
-#      python setup.py sdist
-#
-#   5. For some executables like ssmtp, you might need to modify user path (add to .bashrc:
-#      export PATH=/usr/sbin:$PATH
-#
-# MONITORING:
-#      ps -ef | grep 'pg_alert\|timeout'
-#      tail -f /pgarchive/alerts/alerts-history-$(date +"%Y-%m%d").log
-#
-# TODOs:
-#   1. Allow more flexibility in log file format for day names and date formats
-#   2. 
-#
-# main loop:
-#    self.bypass = False
-#    if not a line or too many messages requiring a pause:
-#        checkotherstuff() calls checkconnections()
-#    else
-#        call alertvalidated(msg)
-#             calls sqlstatebypass(msg)
-#             calls evaluatelog()
-#                   calls lastcheck() for application names
+# See pgalertnotes.txt for more info.
 #
 # Modifications History:
 # Date          Programmer        Description of Change
@@ -135,13 +55,16 @@
 #                                 New logic uses pids instead of sockets for avoiding duplicate instances.
 #                                 Return details of idle in transactions instead of just the counts.
 # 2017-06-28    Michael Vitale    V 2.2: Enhancements. Added new parmeter to dictate mailx format options, MAILX_FORMAT
-# 2017-10-07    Michael Vitale    V 2.3: Fix for latest version of PG, v10.
+# 2017-10-07    Michael Vitale    V 2.3: Fix for latest version of PG, v10. Abort if we cannot connect to PG.
+#                                        pg_log --> log    pg_xlog --> pg_wal  waiting-->wait_state
+#
 ################################################################################################################
 import string, sys, os, time, datetime, exceptions, socket, commands, argparse
 import random, math, signal, platform, glob, stat, imp
 # import sh
 import ConfigParser, smtplib, subprocess
 from subprocess import *
+from decimal import *
 # from subprocess import Popen, PIPE
 from optparse import OptionParser
 from email.MIMEMultipart import MIMEMultipart
@@ -190,7 +113,7 @@ def which(program):
 
 class pgmon:
     def __init__(self):
-        self.version       = "pg_alert (V 2.2 Jun. 28, 2017)"
+        self.version       = "pg_alert (V 2.3   Oct. 07, 2017)"
         self.system         = platform.system()
         self.python_version = platform.python_version()
         self.description   = "%s is a PostgreSQL alerting tool" % self.version
@@ -257,8 +180,7 @@ class pgmon:
         self.alert_stmt_timeout = False
         self.lockwait        = 1
         self.tempbytesthreshold = 999999999999
-        self.server_version  = ''
-	self.server_version_num = -1
+        self.pgversion       = Decimal('0.0')
 	self.log_filename    = ''
         
         self.slaves          = ''
@@ -455,19 +377,19 @@ class pgmon:
             if agluc[0] == 'data_directory':
                 self.data_directory = agluc[1]
             elif agluc[0] == 'log_directory':
-                print 'DEBUG: log dir = %s' % agluc[1]
                 if self.pglog_directory == '':
                     self.pglog_directory = agluc[1]
                     if self.pglog_directory == 'pg_log' or self.pglog_directory == 'log':
                         # need to preappend data dir
                         self.pglog_directory = self.data_directory + '/' + self.pglog_directory
-                print 'DEBUG: complete log dir = %s' % self.pglog_directory
             elif agluc[0] == 'log_line_prefix':
                 self.log_line_prefix = agluc[1]
             elif agluc[0] == 'server_version':
-                self.server_version = agluc[1]
+                self.pgversion = Decimal(agluc[1])
             elif agluc[0] == 'server_version_num':
-                self.server_version_num = int(agluc[1])                
+                pass
+                # self.server_version_num = int(agluc[1])                
+                # print 'DEBUG: server version number: %d' % self.server_version_num
             elif agluc[0] == 'log_filename':
                 self.log_filename = agluc[1]                                
             else:
@@ -628,9 +550,11 @@ class pgmon:
             self.printit("using connection string: %s" % connstr)
             
             # v2.1 enhancement: do not abort if we cannot connect, just disable db checking stuff
-            self.printit("%s: NOTICE. DB session checks are disabled for this instance of pg_alert." % now)
+            # v2.3 on second thought, abort if we cannot connect.
+            #self.printit("%s: NOTICE. DB session checks are disabled for this instance of pg_alert." % now)
+            self.printit("%s: NOTICE. Unable to connect to database. Exiting...." % now)
             self.connected = False
-            # self.cleanup(1)          
+            self.cleanup(1)          
 
         if  self.connected:
             rc = self.getdbinfo()
@@ -1012,11 +936,17 @@ class pgmon:
                 return ERR,"",err            
             return OK, out, ""    
         else:
-            rc = subprocess.call(cmd, shell=True,bufsize=0)  
-            if rc <> 0:
-                self.printit("%s: subprocess.call error rc=%d cmd=%s" % (self.start,rc, cmd))
-                return ERR,"",""
-            return OK,"",""
+            try:
+                rc = subprocess.call(cmd, shell=True,bufsize=0)  
+                if rc <> 0:
+                    self.printit("%s: executecmd.subprocess.call error rc=%d cmd=%s" % (self.start,rc, cmd))
+                    return ERR,"",""
+            # note, not catching subprocess.call errors for sendmail!
+            except Exception, exc:
+                self.printit( "executecmd.subprocess.call error2: %s" % str(exc))
+            finally:    
+                return OK,"",""                    
+
 
     ########################
     def sendSMSmsg(self, message):
@@ -1042,6 +972,8 @@ class pgmon:
         server.starttls()
         server.ehlo()
         server.login(fromaddr, smtp_password)
+        # if self.verbose:
+        #         self.printit("SendSMSmsg: from: %s to: %s. subject: %s Text = %s" % (fromaddr,toaddr,msg_body))
         server.sendmail(fromaddr, toaddr, msg_body)
         server.quit()
 
@@ -1131,7 +1063,7 @@ class pgmon:
             # echo "This is the message body" | mail -s "This is the subject" michael.vitale@assurant.com -a "From: xxx@xxx.commail.tld"
             #
             # on ec2 redhat, this is the syntax that works:
-            #echo "This is the message body" | mail -s "This is the subject11" michael.vitale@datavail.com
+            #echo "This is the message body" | mail -s "This is the subject" michael.vitale@datavail.com
             
             subject = self.subject + ' (' + self.clusterid + ')'
             # new parameter logic for v2.2
@@ -1140,11 +1072,14 @@ class pgmon:
             elif self.mailx_format == 'ec2':
                 cmd = 'echo "%s" | %s -s "%s" %s' % (msg, self.mailbin, subject, self.to)
             
-            rc,out,errs = self.executecmd(cmd,False)
             # NOTE: mailx errors are not caught with executecmd. Return is always 0
+            # so call sendmail directly instead
+            # echo "2017-10-09 07:50:15.639 EDT [3357] postgres@postgres ERROR:  my error" | /usr/bin/mailx -s "pg_alert (MICHAELV8)" michaeldba@sqlexec.com -a "From: michael@sqlexec.com"
+            rc,out,errs = self.executecmd(cmd,False)
             if rc <> 0:
                 self.printit("MAILX Error: %d *%s* *%s*" % (rc, out, errs))
                 return ERR;
+                
         elif self.mail_method == 'ssmtp':                
             # ssmtp protocol
             # echo -e 'To: michael@sqlexec.com\nFrom: xxx@xxx.com\nSubject: my subject\n\nThis is my text message' | ssmtp -vvv michael@sqlexec.com
@@ -1824,7 +1759,7 @@ class pgmon:
         
     ########################
     def checkpgdirs(self):
-        # check size of data directory, pg_xlog, and pg temp 
+        # check size of data directory, pg_xlog/pg_wal, and pg temp 
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                    
         # use df for mount points percentages
         # df -h /pgdata | tail -n1 | awk '{print "Size="$2 ",Used=" $3 ",Avail=" $4 ",Usedpct=" $5}' --> Size=2.4T,Used=1.6T,Avail=815G,Usedpct=67%
@@ -1842,8 +1777,13 @@ class pgmon:
         
         # get real path of pg_xlog directory.  If it is not a symlink and not a mount point, the entire mount point for the data directory mount point is returned.
         # otherwise it is the mount point for the symlinked pg_xlog directory
-        pg_xlog = os.path.realpath(self.data_directory + "/pg_xlog")
-        cmd = "df -h " + pg_xlog + " | tail -n1 | awk '{print $5}'"
+        # v 2.3 fix
+        if self.pgversion > 9.6:
+            pg_wal = os.path.realpath(self.data_directory + "/pg_wal")        
+            cmd = "df -h " + pg_wal + " | tail -n1 | awk '{print $5}'"
+        else:
+            pg_xlog = os.path.realpath(self.data_directory + "/pg_xlog")
+            cmd = "df -h " + pg_xlog + " | tail -n1 | awk '{print $5}'"
         rc,pg_xlog_perc,errs = self.executecmd(cmd, True)
         if rc <> 0:
             return ERR
@@ -2000,12 +1940,12 @@ class pgmon:
         msg = '%s: verbose=%s sendmail=%s check_sqlstate=%s max_alerts=%d clusterid=%s  pgport=%s  from_=%s  to=%s  minutes=%d  keeplogdays=%d log_dir=%s alert_dir=%s data_directory=%s  ' \
               'dbname=%s  dbuser=%s  dbhost=%s sqlstates=%s sqlclasses=%s prefix=***%s*** postfix=***%s*** log_line_prefix=%s lockwait=%d checkinterval=%d  loadthreshold=%d  ' \
               'dirthreshold=%d  idletransthreshold=%d querytransthreshold=%d  pgsql_tmp_threshold=%d ignore_autovacdaemon=%s ignore_uservac=%s slaves=%s ignoreapps=%s ' \
-              'ignoreusers=%s monitorlag=%s alert_stmt_timeout=%s ignorequeries=%s server_version=%s server_version_num=%d suspended=%s mail_method=%s smtp_server=%s, smtp_account=%s\n' \
+              'ignoreusers=%s monitorlag=%s alert_stmt_timeout=%s ignorequeries=%s server_version=%d suspended=%s mail_method=%s smtp_server=%s, smtp_account=%s\n' \
               % (now,self.verbose, self.sendemail, self.check_sqlstate, self.max_alerts, self.clusterid, self.pgport, self.from_, self.to, self.minutes, self.keeplogdays, self.pglog_directory, self.alert_directory ,\
                  self.data_directory, self.dbname, self.dbuser, self.dbhost, self.sqlstates, self.sqlclasses, self.sqlstateprefix, self.sqlstatepostfix, self.log_line_prefix, \
                  self.lockwait, self.checkinterval, self.loadthreshold, self.dirthreshold, self.idletransthreshold, self.querytransthreshold, self.pgsql_tmp_threshold, \
                  self.ignore_autovacdaemon, self.ignore_uservac, self.slaves, self.ignoreapps, self.ignoreusers, self.monitorlag, self.alert_stmt_timeout, self.ignorequeries, \
-                 self.server_version, self.server_version_num, self.suspended, self.mail_method, self.smtp_server, self.smtp_account)
+                 self.pgversion, self.suspended, self.mail_method, self.smtp_server, self.smtp_account)
         self.printit(msg)
         return
 

@@ -1072,9 +1072,10 @@ class pgmon:
             elif self.mailx_format == 'ec2':
                 cmd = 'echo "%s" | %s -s "%s" %s' % (msg, self.mailbin, subject, self.to)
             
-            # NOTE: mailx errors are not caught with executecmd. Return is always 0
-            # so call sendmail directly instead
+            # NOTE: mailx errors are not caught with executecmd. Return is always 0.  If port 25 is blocked by isp mail method = MAIL will not work
+            #       review /var/log/mail.log for errors
             # echo "2017-10-09 07:50:15.639 EDT [3357] postgres@postgres ERROR:  my error" | /usr/bin/mailx -s "pg_alert (MICHAELV8)" michaeldba@sqlexec.com -a "From: michael@sqlexec.com"
+            # print 'DEBUG: %s' % cmd
             rc,out,errs = self.executecmd(cmd,False)
             if rc <> 0:
                 self.printit("MAILX Error: %d *%s* *%s*" % (rc, out, errs))

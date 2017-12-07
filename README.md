@@ -115,6 +115,6 @@ Note that the example above is really using the **heirloom** version of mailx.
 <br /><br />
 **smtp** designates to use the python email delivery protocol, **smtplib** – Simple Mail Transfer Protocol client.  
 <br /><br />
-It may be necessary to edit **/etc/ssmtp/ssmtp.conf** to get mail to work properly.
+With default mail method, it may be necessary to edit **/etc/ssmtp/ssmtp.conf** and **/etc/ssmtp/revaliases** to get mail to work properly. To set the from clause properly, you may need to modify **/etc/passwd** to specify a default email address for the sendmail linux user.
 
 

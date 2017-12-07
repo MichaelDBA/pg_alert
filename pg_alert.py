@@ -57,7 +57,8 @@
 # 2017-06-28    Michael Vitale    V 2.2: Enhancements. Added new parmeter to dictate mailx format options, MAILX_FORMAT
 # 2017-10-07    Michael Vitale    V 2.3: Fix for latest version of PG, v10. Abort if we cannot connect to PG.
 #                                        pg_log --> log    pg_xlog --> pg_wal  waiting-->wait_state
-#
+# 2017-12-07	Michael Vitale	  V 2.4: enable better email failure debugging with new DEBUG flag
+#                                        fixed other email related stuff
 ################################################################################################################
 import string, sys, os, time, datetime, exceptions, socket, commands, argparse
 import random, math, signal, platform, glob, stat, imp
@@ -113,7 +114,7 @@ def which(program):
 
 class pgmon:
     def __init__(self):
-        self.version       = "pg_alert (V 2.3   Oct. 07, 2017)"
+        self.version       = "pg_alert (V 2.4   Dec. 07, 2017)"
         self.system         = platform.system()
         self.python_version = platform.python_version()
         self.description   = "%s is a PostgreSQL alerting tool" % self.version
@@ -176,6 +177,7 @@ class pgmon:
         self.log_line_prefix = ""
         self.max_alerts      = 100
         self.verbose         = False
+        self.debug           = False
         self.monitorlag      = False
         self.alert_stmt_timeout = False
         self.lockwait        = 1
@@ -218,7 +220,9 @@ class pgmon:
         self.suspended            = False
         self.bypass               = False
         self.connected            = False
-        
+
+        self.stdout               = open('/tmp/stdout', "w+")        
+        self.stderr               = open('/tmp/stderr', "w+")        
         
         # db stats ordered array: datname,numbackends,conflicts,temp_bytes,deadlocks
         self.dbstats = []
@@ -495,21 +499,27 @@ class pgmon:
                 sys.exit(ERR)
         elif self.mail_method == 'mail':
             # see if we can use bsd version of mailx to avoid syntax problems with heirloom version
-            result = which('mailx')
-            if result == '':
-                self.printit("mailx program not found.  Please install mailx or use another mail method.")
-                sys.exit(ERR) 
-            rc = self.testcmd(result, 'mailx test')    
-            if rc == OK:
-                self.mailbin = result
-            # rc = self.testcmd('/usr/bin/bsd-mailx')
-            #if rc == OK:
-            #    self.mailbin ='/usr/bin/bsd-mailx'
+            if os.path.isfile('/usr/bin/bsd-mailx'):
+                self.mailbin = '/usr/bin/bsd-mailx'
+            else:
+                result = which('mailx')
+                if result == '':
+                    self.printit("mailx program not found.  Please install mailx or use another mail method.")
+                    sys.exit(ERR) 
+                rc = self.testcmd(result, 'mailx test')    
+                if rc == OK:
+                    self.mailbin = result
+                # rc = self.testcmd('/usr/bin/bsd-mailx')
+                #if rc == OK:
+                #    self.mailbin ='/usr/bin/bsd-mailx'
+
+        self.printit("Using this location for mailx: %s" % self.mailbin)
 
         self.ignore_autovacdaemon = config.getboolean('optional', 'ignore_autovacdaemon')
         self.ignore_uservac       = config.getboolean('optional', 'ignore_uservac')
         self.monitorlag = config.getboolean('optional', 'monitorlag')
         self.verbose    = config.getboolean('required', 'verbose')
+        self.debug      = config.getboolean('required', 'debug')
         self.alert_stmt_timeout = config.getboolean('optional', 'alert_stmt_timeout')
         self.suspended   = config.getboolean('optional', 'suspended')
         
@@ -807,6 +817,7 @@ class pgmon:
         self.ignore_uservac       = config.getboolean('optional', 'ignore_uservac')
         self.monitorlag = config.getboolean('optional', 'monitorlag')
         self.verbose    = config.getboolean('required', 'verbose')
+        self.debug      = config.getboolean('required', 'debug')
         self.alert_stmt_timeout = config.getboolean('optional', 'alert_stmt_timeout')
         self.lockfilter = config.get("optional", "lockfilter",1)
     
@@ -914,13 +925,16 @@ class pgmon:
             print message
             return OK
         print message
-        cmd = 'echo "%s" >> %s' % (message, self.loghistory)
-        rc = subprocess.call(cmd, shell=True)  
+        #cmd = 'echo "%s" >> %s' % (message, self.loghistory)
+        cmd = 'echo \'%s\' >> %s' % (message, self.loghistory)
+        # print 'cmd -->%s' % cmd
+        #rc = subprocess.call(cmd, shell=True)  
+        rc = subprocess.call(cmd, shell=True, executable='/bin/bash')  
         if rc <> 0:
-            msg = "Unable to print message (%s). subprocess.call error return code = %d" % (message,rc)
+            msg = "Unable to print previous message. subprocess.call error return code = %d" % (rc)
             print msg
-            sysmsg = "cat %s > %s\n" % (msg,self.loghistory)
-            os.system(sysmgs)
+            # sysmsg = "cat %s > %s\n" % (msg,self.loghistory)
+            # os.system(sysmgs)
             self.cleanup(1)                
         else:
             return OK
@@ -936,18 +950,43 @@ class pgmon:
                 return ERR,"",err            
             return OK, out, ""    
         else:
+            # NOTE: subprocess.call command will not return an error for a subsequent error in the called routine, so need to handle stderr
+            self.stdout.truncate()
+            self.stderr.truncate()
             try:
-                rc = subprocess.call(cmd, shell=True,bufsize=0)  
+                # rc = subprocess.call(cmd, shell=True,bufsize=0)  
+                rc = subprocess.call(cmd, shell=True,bufsize=0,stdout=self.stdout, stderr=self.stderr)  
                 if rc <> 0:
                     self.printit("%s: executecmd.subprocess.call error rc=%d cmd=%s" % (self.start,rc, cmd))
                     return ERR,"",""
             # note, not catching subprocess.call errors for sendmail!
-            except Exception, exc:
+            except OSError:
                 self.printit( "executecmd.subprocess.call error2: %s" % str(exc))
+                return ERR,"",""
+            except Exception, exc:
+                self.printit( "executecmd.subprocess.call error3: %s" % str(exc))
+                return ERR,"",""
             finally:    
-                return OK,"",""                    
-
-
+                # check stderr for errors
+                print 'checking for errors...'
+                self.stderr.seek(0)
+                lines = self.stderr.readlines()
+                alen  = len(lines)
+                if alen > 0:
+                    # something must have been written there, so get it
+                    buffer = ''
+                    for aline in lines:
+                        buffer = buffer + "%s" % aline
+                    # replace embedded ticks and newline characters
+                    buffer = buffer.replace("'", "*")
+                    buffer = buffer.replace('"', "*")
+                    buffer = buffer.replace('\n', '***')
+                    self.printit( "executecmd.subprocess.call error4: %s" % buffer)
+                    return ERR,"",""
+                else:    
+                    return OK,"",""                    
+        return OK,"",""                    
+        
     ########################
     def sendSMSmsg(self, message):
         smtp_server  = self.smtp_server
@@ -972,8 +1011,8 @@ class pgmon:
         server.starttls()
         server.ehlo()
         server.login(fromaddr, smtp_password)
-        # if self.verbose:
-        #         self.printit("SendSMSmsg: from: %s to: %s. subject: %s Text = %s" % (fromaddr,toaddr,msg_body))
+        if self.debug:
+            self.printit("DEBUG:SendSMSmsg: from: %s to: %s. subject: %s Text = %s" % (fromaddr,toaddr,msg_body))
         server.sendmail(fromaddr, toaddr, msg_body)
         server.quit()
 
@@ -1068,14 +1107,15 @@ class pgmon:
             subject = self.subject + ' (' + self.clusterid + ')'
             # new parameter logic for v2.2
             if self.mailx_format == 'default':
-                cmd = 'echo "%s" | %s -s "%s" %s -a "From: %s"' % (msg, self.mailbin, subject, self.to, self.from_)
+                cmd = 'echo \'%s\' | %s -s "%s" %s -a "From: %s"' % (msg, self.mailbin, subject, self.to, self.from_)
             elif self.mailx_format == 'ec2':
-                cmd = 'echo "%s" | %s -s "%s" %s' % (msg, self.mailbin, subject, self.to)
+                cmd = 'echo \'%s\' | %s -s "%s" %s' % (msg, self.mailbin, subject, self.to)
             
             # NOTE: mailx errors are not caught with executecmd. Return is always 0.  If port 25 is blocked by isp mail method = MAIL will not work
             #       review /var/log/mail.log for errors
             # echo "2017-10-09 07:50:15.639 EDT [3357] postgres@postgres ERROR:  my error" | /usr/bin/mailx -s "pg_alert (MICHAELV8)" michaeldba@sqlexec.com -a "From: michael@sqlexec.com"
-            # print 'DEBUG: %s' % cmd
+            if self.debug:
+                self.printit('DEBUG: default Alert Command --> %s' % cmd)
             rc,out,errs = self.executecmd(cmd,False)
             if rc <> 0:
                 self.printit("MAILX Error: %d *%s* *%s*" % (rc, out, errs))
@@ -1089,12 +1129,15 @@ class pgmon:
                 cmd = "echo -e 'To: %s\nFrom: %s\nSubject: %s\n\n%s' | ssmtp -vvv %s" % (self.to, self.from_, subject, msg, self.to)
             else:
                 cmd = "echo -e 'To: %s\nFrom: %s\nSubject: %s\n\n%s' | ssmtp %s" % (self.to, self.from_, subject, msg, self.to)
-            # self.printit("SSMTP Alert Command --> %s" % cmd)
+            if self.debug:
+                self.printit("DEBUG: SSMTP Alert Command --> %s" % cmd)
             rc,out,errs = self.executecmd(cmd,False)
             if rc <> 0:
                 return ERR;            
         else:
             # assume SMTP
+            if self.debug:
+                self.printit("DEBUG: SSMTP Alert Command --> %s" % msg)            
             rc = self.sendSMTPmsg(msg)
             if rc <> 0:
                 return ERR;
@@ -2088,7 +2131,8 @@ while True:
                 tailfinished = 1
             p.alert.seek(where)
         else:
-            p.printit("%s evaluating msg: %s" % (now, line.strip()))
+            if p.debug:
+                p.printit("%s evaluating msg: %s" % (now, line.strip()))
             if p.alertvalidated(line.strip()):
                 buffcnt = buffcnt + 1    
                 rc = p.sendalert(line.strip())
@@ -2104,4 +2148,3 @@ while True:
 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")    
 p.printit("%s: Daily Monitoring ending. %d alert(s) detected." % (now, p.alertcnt))
 p.cleanup(0)
-

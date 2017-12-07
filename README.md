@@ -6,7 +6,7 @@ This python program monitors the PostgreSQL log file and sends email alerts base
 <br/>
 GNU V3 and MIT licenses are conveyed accordingly.
 <br/>
-Bugs can be reported @ michael@sqlexec.com
+Bugs can be reported @ michaeldba@sqlexec.com
 
 ## History
 The first version of this program was created back in 2012.  It was big and messy since the logic was based upon parsing the current PG log file.  A major rewrite was undertaken in 2016 using the new tail logic. Since then it has been uploaded to this public github repo to share with the rest of the PG community.  It has been tested extensively with Ubuntu/Debian distros using PG 9.x.  Please provide details of errors with other distros or PG versions so we can update accordingly.

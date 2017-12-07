@@ -112,9 +112,7 @@ MAIL is really **mailx** since there is a symlink pointing to a particular mailx
 Note that the example above is really using the **heirloom** version of mailx.
 
 **ssmtp** is a simple mail transfer agent (MTA) to deliver mail from a computer to a mail hub (SMTP server). It is not as robust as SMTP.
-
 **smtp** designates to use the python email delivery protocol, **smtplib** – Simple Mail Transfer Protocol client.  
-<br /><br />
-It may be necessary to edit /etc/ssmtp/ssmtp.conf to get mail to work properly.
+It may be necessary to edit **/etc/ssmtp/ssmtp.conf** to get mail to work properly.
 
 

@@ -2,7 +2,7 @@
 ###############################################################################
 ### COPYRIGHT NOTICE FOLLOWS.  DO NOT REMOVE
 ###############################################################################
-### Copyright (c) 2012 - 2017, SQLEXEC LLC
+### Copyright (c) 2012 - 2018, SQLEXEC LLC
 ###
 ### This program is bound by the following licenses:
 ###    GNU GENERAL PUBLIC LICENSE Version 3, 29 June 2007
@@ -59,6 +59,7 @@
 #                                        pg_log --> log    pg_xlog --> pg_wal  waiting-->wait_state
 # 2017-12-07	Michael Vitale	  V 2.4: enable better email failure debugging with new DEBUG flag
 #                                        fixed other email related stuff
+# 2018-08-29	Michael Vitale	  V 2.5: fix mail again.  This time use different syntax for CentOS 7
 ################################################################################################################
 import string, sys, os, time, datetime, exceptions, socket, commands, argparse
 import random, math, signal, platform, glob, stat, imp
@@ -114,7 +115,7 @@ def which(program):
 
 class pgmon:
     def __init__(self):
-        self.version       = "pg_alert (V 2.4   Dec. 07, 2017)"
+        self.version       = "pg_alert (V 2.5   Aug. 29, 2018)"
         self.system         = platform.system()
         self.python_version = platform.python_version()
         self.description   = "%s is a PostgreSQL alerting tool" % self.version
@@ -470,8 +471,8 @@ class pgmon:
         self.mail_method   = config.get('optional', 'mail_method').lower()
         # new parameter for v2.2
         self.mailx_format  = config.get('optional', 'mailx_format').lower()
-        if self.mailx_format <> 'default' and self.mailx_format <> 'ec2':
-            self.printit("Invalid MAILX_FORMAT=%s.  Must be one of: default, ec2" % self.mailx_format)
+        if self.mailx_format <> 'default' and self.mailx_format <> 'custom1' and self.mailx_format <> 'custom2':
+            self.printit("Invalid MAILX_FORMAT=%s.  Must be one of: default, custom1, custom2" % self.mailx_format)
             sys.exit(ERR)        
         
         self.smtp_server   = config.get('optional', 'smtp_server')
@@ -752,12 +753,15 @@ class pgmon:
 	# test with this string that doesnt work because previous %<code> has no other characters associated with it.  Consider invalid in these cases.
 	# self.log_line_prefix = '%m %u@%d[%p:%i] [%l-1] %r %a tx=%x,ss=%e: '
 	# self.log_line_prefix = '%m %u@%d[%p: %i ] %r [%a]   %e tx:%x : '
+	#                        '%t [%p]: [%l-1] %u %d %a %r %x %e:'
 	sep = "***"
 	seplen = len(sep)
 	key = sep + 'e'
-	# self.printit("DEBUG: before replacement:'%s'" % self.log_line_prefix)
+	if self.debug:
+	    self.printit("DEBUG: before replacement:'%s'" % self.log_line_prefix)
         prefix = self.log_line_prefix.replace("%",sep)
-        # self.printit("DEBUG: after  replacement:'%s'" % prefix)
+        if self.debug:
+            self.printit("DEBUG: after  replacement:'%s'" % prefix)
 	index = prefix.find(key)
 	if index > -1:
 	    index = prefix.find(key)
@@ -773,8 +777,9 @@ class pgmon:
                 after = after[0:index]
             self.sqlstateprefix  = before
             self.sqlstatepostfix = after
-            # self.printit("DEBUG: prefix  ='%s'" % self.sqlstateprefix)
-            # self.printit("DEBUG: postfix ='%s'" % self.sqlstatepostfix)
+            if self.debug:
+                self.printit("DEBUG: prefix  ='%s'" % self.sqlstateprefix)
+                self.printit("DEBUG: postfix ='%s'" % self.sqlstatepostfix)
 
         if (len(self.sqlstates) <> 0 or len(self.sqlclasses) <> 0) and (self.sqlstateprefix <> '' and self.sqlstatepostfix <> ''):
             # must be valid sqlstate checking
@@ -1100,16 +1105,28 @@ class pgmon:
         if self.mail_method == 'mail':
             # debian syntax that works:
             # echo "This is the message body" | mail -s "This is the subject" michael.vitale@assurant.com -a "From: xxx@xxx.commail.tld"
-            #
-            # on ec2 redhat, this is the syntax that works:
-            #echo "This is the message body" | mail -s "This is the subject" michael.vitale@datavail.com
             
-            subject = self.subject + ' (' + self.clusterid + ')'
-            # new parameter logic for v2.2
+            # v 2.5 fix, parens can cause bash escape character problems for mailx
+            # subject = self.subject + ' (' + self.clusterid + ')'
+            subject = self.subject + ' - ' + self.clusterid
+            
+            # v 2.5 global escape of open and close parents (could be wrapped around the transaction pid)
+            msg = msg.replace('(', '\(')
+            msg = msg.replace(')', '\)')            
+            
             if self.mailx_format == 'default':
                 cmd = 'echo \'%s\' | %s -s "%s" %s -a "From: %s"' % (msg, self.mailbin, subject, self.to, self.from_)
-            elif self.mailx_format == 'ec2':
+                        
+            # new custom format for 2017 redhat ec2 instance
+            #echo "This is the message body" | mail -s "This is the subject" michael.vitale@datavail.com
+            elif self.mailx_format == 'custom1':
                 cmd = 'echo \'%s\' | %s -s "%s" %s' % (msg, self.mailbin, subject, self.to)
+            
+            # new custom format for 2018 CentOS 7 ec2 instance
+            # echo 'testing 11111'    | mailx      -r xx@vitalehouse.com -s "pg_alert (QA PERFORMANCE)" michael@vitalehouse.com
+            elif self.mailx_format == 'custom2':
+                cmd = 'echo \'%s\' | %s -r %s -s "%s" %s' % (msg, self.mailbin, self.from_, subject, self.to)
+            
             
             # NOTE: mailx errors are not caught with executecmd. Return is always 0.  If port 25 is blocked by isp mail method = MAIL will not work
             #       review /var/log/mail.log for errors
@@ -2148,3 +2165,4 @@ while True:
 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")    
 p.printit("%s: Daily Monitoring ending. %d alert(s) detected." % (now, p.alertcnt))
 p.cleanup(0)
+

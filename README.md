@@ -120,21 +120,21 @@ With default mail method, it may be necessary to edit **/etc/ssmtp/ssmtp.conf** 
 ### Installation Tips
 Basically you just download the zip file, extract it, and run it.  Or you can do a git clone on it.
 <br /><br />
-Here are some notes that I did to get it running on CentOS 7 on EC2:<br/>
+Here are some notes that I did to get it running on CentOS 7 on EC2:
 <br /><br />
 yum install git<br/>
 yum install gcc<br/>
 yum install python-psycopg2<br/>
 yum install python-devel<br/>
-yum install mailx<br/>
+yum install mailx
 <br /><br />
 -- Enable the EPEL Repository in RHEL/CentOS 7 (to get python-psutil)<br/>
 wget http://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm<br/>
 rpm -ivh epel-release-latest-7.noarch.rpm<br/>
-yum install python-psutil<br/>
+yum install python-psutil
 <br /><br />
 -- Or install pip and install it like this:<br/>
-pip install psutil<br/>
+pip install psutil
 <br /><br />
 -- configure your pg_alert.conf file and give it a shot for one minute to see if it runs correctly.<br/>
 /var/lib/pgsql/pgalert/pg_alert.py -m 1 -c /var/lib/pgsql/pgalert/pg_alert.conf

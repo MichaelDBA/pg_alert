@@ -2,7 +2,7 @@
 This python program monitors the PostgreSQL log file and sends email alerts based on user-set configuration parameters.  You can get it here:
 `git clone https://github.com/MichaelDBA/pg_alert.git pg_alert`
 
-(c) 2012-2016, 2017 SQLEXEC LLC
+(c) 2012-2018 SQLEXEC LLC
 <br/>
 GNU V3 and MIT licenses are conveyed accordingly.
 <br/>
@@ -117,4 +117,24 @@ Note that the example above is really using the **heirloom** version of mailx.
 <br /><br />
 With default mail method, it may be necessary to edit **/etc/ssmtp/ssmtp.conf** and **/etc/ssmtp/revaliases** to get mail to work properly. To set the from clause properly, you may need to modify **/etc/passwd** to specify a default email address for the sendmail linux user.
 
+### Installation Tips
+Basically you just download the zip file, extract it, and run it.  Or you can do a git clone on it.
 
+Here are some notes that I did to get it running on CentOS 7 on EC2:
+
+yum install git
+yum install gcc
+yum install python-psycopg2
+yum install python-devel
+yum install mailx
+
+-- Enable the EPEL Repository in RHEL/CentOS 7 (to get python-psutil)
+wget http://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm
+rpm -ivh epel-release-latest-7.noarch.rpm
+yum install python-psutil
+
+-- Or install pip and install it like this:
+pip install psutil
+
+-- configure your pg_alert.conf file and give it a shot for one minute to see if it runs correctly.
+/var/lib/pgsql/pgalert/pg_alert.py -m 1 -c /var/lib/pgsql/pgalert/pg_alert.conf

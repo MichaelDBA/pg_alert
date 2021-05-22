@@ -70,6 +70,8 @@
 #                                 remove deprecated import, exceptions, and replace commands with subprocess, ConhfigParser renamed to configparser
 #                                 config.get("required", "clusterid",1) --> config.get("required", "clusterid")                        
 #
+#
+#
 ################################################################################################################
 # v3: exceptions module deprecated, also replace commands with subprocess
 #import string, sys, os, time, datetime, exceptions, socket, commands, argparse, ConfigParser
@@ -179,6 +181,7 @@ class pgmon:
         self.from_         = ""
         self.conn          = None
         self.rds           = False
+        self.dbid          = ""
         self.dbname        = ""
         self.dbuser        = ""
         self.dbhost        = ""
@@ -248,6 +251,39 @@ class pgmon:
         
         # db stats ordered array: datname,numbackends,conflicts,temp_bytes,deadlocks
         self.dbstats = []
+
+
+    ########################
+    def get_rdslog(self):
+        # call aws rds cli API to get the latest log file:
+        cmd = 'date +%s%3N --date="1 minute ago"'
+        rc,out,errs = self.executecmd(cmd,True)  
+        if rc != 0:
+            self.printit('Unable to get epoch for use with RDS CLI interface. rc=%d  errors=%s' % (rc, errs))            
+            return ''
+        epoch = out.rstrip("\n")
+        print ("Using epoch=%s to get the latest RDS log." % epoch)
+        
+        # get the name of the most recent log file
+        #cmd = "aws rds describe-db-log-files --db-instance-identifier %s --file-size 1 --file-last-written %s" % (self.dbid, out)
+        cmd = "aws rds describe-db-log-files --db-instance-identifier %s --file-size 1 --file-last-written %s | grep -i logfilename | cut -f2 -d: |  tr -d ',' | tr -d '\\\"'"   % (self.dbid, epoch)
+        print ("cmd=%s" % cmd)
+        rc,out,errs = self.executecmd(cmd,True)  
+        if rc != 0:
+            self.printit('Unable to get name of most recent rds log file. rc=%d  errors=%s' % (rc, errs))            
+            return ''        
+        
+        logfilename = out.strip()
+        logfilename2 = logfilename.replace('error/','')
+
+        # get the log
+        cmd = "aws rds download-db-log-file-portion --db-instance-identifier %s --log-file-name %s  --starting-token 0 --output text > %s/%s.log" % (self.dbid, logfilename, self.alert_directory, logfilename2)
+        rc,out,errs = self.executecmd(cmd,True)  
+        if rc != 0:
+            self.printit('Unable to get rds log file. rc=%d  errors=%s' % (rc, errs))
+            return ''                
+        
+        return logfilename
 
     ########################
     def get_pidlock(self):
@@ -567,6 +603,11 @@ class pgmon:
             self.verbose = self.options.verbose
 
         self.rds  = config.getboolean("required", "rds")
+        if self.rds:
+             self.dbid = config.get("required", "dbid")
+             if self.dbid == '':
+                 self.printit("No RDS DBID provided.")
+                 sys.exit(ERR)                     
         if self.dbname == '':
             self.dbname     = config.get("required", "dbname")
         if self.dbuser == '':            
@@ -730,17 +771,29 @@ class pgmon:
         if self.from_ == "":
             self.from_ = "PostgreSQL Administrator <%s@%s>" % (self.dbuser, self.dbhost)
 
-        # parse log_filename to get the right PG log file to open.
-        rc, log_filename = self.getlogfilename()
-        if rc != OK:
-            self.cleanup(1)
-        self.logfile = "%s/%s" % (self.pglog_directory, log_filename)
-        if not os.path.exists(self.logfile):
-            if self.rds:
-                self.printit("PG log file does not exist. RDS logs are not implemented at the present time: %s" % self.logfile)
-            else:
+        # get pg log file        
+        if self.rds:
+            # need to use aws cli interface to download the latest log file. Make sure aws cli is available.
+            cmd = "aws --version"
+            rc,out,errs = self.executecmd(cmd,True)  
+            if rc != 0:
+                self.cleanup(rc)
+            print ("aws rds cli interface is available: %s" % (out))
+            
+            log_filename = self.get_rdslog()
+            if log_filename == '':
+                self.cleanup(rc)            
+            print ("describe output=%s" % log_filename)
+        else:
+            # parse log_filename to get the right PG log file to open.        
+            rc, log_filename = self.getlogfilename()
+            if rc != OK:
+                self.cleanup(1)
+            self.logfile = "%s/%s" % (self.pglog_directory, log_filename)
+            if not os.path.exists(self.logfile):
                 self.printit("PG log file does not exist: %s" % self.logfile)            
             self.cleanup(1)    
+            
         self.logalert     = "%s/alerts-%s.log" % (self.alert_directory,self.filedatefmt)
         self.loghistory   = "%s/alerts-history-%s.log" % (self.alert_directory,self.filedatefmt)
 
@@ -988,7 +1041,9 @@ class pgmon:
             if err is not None:            
                 self.printit("%s: popen.communicate error %s" % (err))
                 return ERR,"",err            
-            return OK, out, ""    
+            
+            # remove 'b' and other nonprintable characters    
+            return OK, out.decode("utf-8"), ""    
         else:
             # NOTE: subprocess.call command will not return an error for a subsequent error in the called routine, so need to handle stderr
             self.stdout.truncate()

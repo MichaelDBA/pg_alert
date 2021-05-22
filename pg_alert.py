@@ -1,8 +1,9 @@
+#!/usr/bin/env python3
 #!/usr/bin/env python
 ###############################################################################
 ### COPYRIGHT NOTICE FOLLOWS.  DO NOT REMOVE
 ###############################################################################
-### Copyright (c) 2012 - 2018, SQLEXEC LLC
+### Copyright (c) 2012 - 2021, SQLEXEC LLC
 ###
 ### This program is bound by the following licenses:
 ###    GNU GENERAL PUBLIC LICENSE Version 3, 29 June 2007
@@ -60,17 +61,33 @@
 # 2017-12-07	Michael Vitale	  V 2.4: enable better email failure debugging with new DEBUG flag
 #                                        fixed other email related stuff
 # 2018-08-29	Michael Vitale	  V 2.5: fix mail again.  This time use different syntax for CentOS 7
+# 2021-05-22    Michael Vitale    V 3.0: upgraded from Python v2.7 to v3.0.  Python v2.x is not supported anymore
+#                                 bunch of stricter indentation fixes
+#                                 #except socket.error, msg: --> except socket.error as msg:
+#                                 except psycopg2.Error, e:  --> except psycopg2.Error as e:    
+#                                 except Exception, exc:     -->  except Exception as exc: 
+#                                 print msg                  --> print(msg) 
+#                                 remove deprecated import, exceptions, and replace commands with subprocess, ConhfigParser renamed to configparser
+#                                 config.get("required", "clusterid",1) --> config.get("required", "clusterid")                        
+#
 ################################################################################################################
-import string, sys, os, time, datetime, exceptions, socket, commands, argparse
+# v3: exceptions module deprecated, also replace commands with subprocess
+#import string, sys, os, time, datetime, exceptions, socket, commands, argparse, ConfigParser
+import string, sys, os, time, datetime, socket, argparse, configparser
 import random, math, signal, platform, glob, stat, imp
-# import sh
-import ConfigParser, smtplib, subprocess
+import smtplib, subprocess
 from subprocess import *
 from decimal import *
-# from subprocess import Popen, PIPE
 from optparse import OptionParser
-from email.MIMEMultipart import MIMEMultipart
-from email.MIMEText import MIMEText
+
+# fix for v3:
+#from email.MIMEMultipart import MIMEMultipart
+from email.mime.multipart import MIMEMultipart
+
+# fix for v3:
+#from email.MIMEText import MIMEText
+from email.mime.multipart import MIMEMultipart
+
 # psycopg2 and psutil imported directly in function where needed since we test for it using imp to avoid exception 
 
 OK  = 0
@@ -89,7 +106,10 @@ def get_lock(processname):
         get_lock._lock_socket.bind('\0' + processname)
         sock.bind(server_address)
         p.printit("socket: %s" % sock.getsockname())
-    except socket.error, msg:
+    # fix for v3    
+    #except socket.error, msg:
+    #except Exception as msg:
+    except socket.error as msg:
         # p.printit('Lock exists (%s) %s. Program is already running. Exiting...' % (p.processname, sock.getsockname()))
         p.printit('Lock exists (%s) Error=%s.  Program is already running. Exiting...' % (p.processname, msg))
         return NOPROGLOCK
@@ -148,7 +168,7 @@ class pgmon:
         self.start         = self.startd.strftime("%Y-%m-%d %H:%M:%S")
         self.start_date    = self.startd.strftime("%Y-%m-%d")
         self.endd          = self.startd + datetime.timedelta(0,1)
-	self.end_date      = self.endd.strftime("%Y-%m-%d")    
+        self.end_date      = self.endd.strftime("%Y-%m-%d")    
         self.end           = self.endd.strftime("%Y-%m-%d %H:%M:%S")    
         self.time_start    = time.time()
         self.refreshed     = time.time()
@@ -158,8 +178,9 @@ class pgmon:
         self.subject       = 'pg_alert'
         self.from_         = ""
         self.conn          = None
+        self.rds           = False
         self.dbname        = ""
-	self.dbuser        = ""
+        self.dbuser        = ""
         self.dbhost        = ""
         self.pgport        = ""
         self.clusterid     = ""
@@ -184,7 +205,7 @@ class pgmon:
         self.lockwait        = 1
         self.tempbytesthreshold = 999999999999
         self.pgversion       = Decimal('0.0')
-	self.log_filename    = ''
+        self.log_filename    = ''
         
         self.slaves          = ''
         self.ignoreusers     = ''
@@ -353,8 +374,10 @@ class pgmon:
             return ERR
         
         # we only support python 2.7 flavors      
-        if self.python_version[0:3] <> '2.7':
-            self.printit("Unsupported python version, %s.  Only 2.7.x are supported at the present time.  Some important functionality may not work correctly." % (self.python_version))
+        # fix for v3: replace <> with != and require python 3.6
+        #if self.python_version[0:3] <> '2.7':
+        if self.python_version[0:3] != '3.6':
+            self.printit("Unsupported python version, %s.  Only 3.6.x and above are supported at the present time.  Some important functionality may not work correctly." % (self.python_version))
             # return ERR
             return OK
         return OK    
@@ -365,18 +388,20 @@ class pgmon:
         # get some PG stuff
         cur = self.conn.cursor()
         sql = "select name, setting from pg_settings where name in ('data_directory','log_directory','log_filename','log_line_prefix','server_version','server_version_num' ) order by name"
-	try:
-	    cur.execute(sql)
-	except psycopg2.Error, e:
+        try:
+            cur.execute(sql)
+        # fix for v3    
+        #except psycopg2.Error, e:
+        except psycopg2.Error as e:
             cur.close()
-	    self.printit("SQL Error: unable to retrieve PG Glucs: %s" % (e))
-	    self.cleanup(1)                
+            self.printit("SQL Error: unable to retrieve PG Glucs: %s" % (e))
+            self.cleanup(1)                
 
         glucs = cur.fetchall()
         if not glucs:
             cur.close()
-	    self.printit("SQL Error: no glucs found.")
-	    self.cleanup(1)                        
+            self.printit("SQL Error: no glucs found.")
+            self.cleanup(1)                        
 
         for agluc in glucs:
             if agluc[0] == 'data_directory':
@@ -410,7 +435,8 @@ class pgmon:
     def initandvalidate(self):
 
         rc = self.checksystem()
-        if rc <> OK:
+        # fix for v3: replace <> with !=
+        if rc != OK:
             sys.exit(rc)
 
         # register signal handler to catch interrupts so we can end gracefully.
@@ -432,14 +458,14 @@ class pgmon:
             self.printit("pg_alert config file does not exist: %s" % self.configfile)
             sys.exit(ERR)
 
-        if self.options.dbname <> "":
+        if self.options.dbname != "":
             self.dbname     = self.options.dbname
-        if self.options.dbuser <> "":
+        if self.options.dbuser != "":
             self.dbuser     = self.options.dbuser
-        if self.options.dbhost <> "":
+        if self.options.dbhost != "":
             self.dbhost     = self.options.dbhost
                 
-        config = ConfigParser.SafeConfigParser({'sqlstate':'', 'sqlclass':'', 'lockwait':'', 'checkinterval':'', \
+        config = configparser.SafeConfigParser({'sqlstate':'', 'sqlclass':'', 'lockwait':'', 'checkinterval':'', \
                  'loadthreshold':'', 'dirthreshold':'', 'idletransthreshold':'', 'querytransthreshold':'', 'pgsql_tmp_threshold':'', 'lockfilter':'', \
                  'pglog_directory':'', 'alert_directory':'', 'ignore_autovacdaemon':'True', 'ignore_uservac':'True', 'tempbytesthreshold':'', 'slaves':'', \
                  'monitorlag':'False', 'alert_stmt_timeout':'False', 'ignoreapps':'', 'ignoreusers':'','ignorequeries':'', 'suspended':'False', \
@@ -447,31 +473,33 @@ class pgmon:
         
         config.read(self.configfile)
         
-        self.clusterid  = config.get("required", "clusterid",1)
+        # fix for v3:
+        #self.clusterid  = config.get("required", "clusterid",1)
+        self.clusterid  = config.get("required", "clusterid")
         if self.clusterid == "":
             self.printit("Invalid config input (CLUSTERID). Expected a short descriptor field like PROD.")
             sys.exit(ERR)
-        self.to         = config.get("required", "to",1)            
+        self.to         = config.get("required", "to")            
         if self.to == "":
             self.printit("Invalid config input (TO). Expected at least one email address.")
             sys.exit(ERR)
                 
         self.sendemail  = config.getboolean('required', 'emailalerts')
-        self.alert_directory = config.get("required", "alertlog_directory",1)
+        self.alert_directory = config.get("required", "alertlog_directory")
         if not os.path.isdir(self.alert_directory):
-	    self.printit("Alert log directory is invalid directory: %s" % self.alert_directory)
+            self.printit("Alert log directory is invalid directory: %s" % self.alert_directory)
             sys.exit(ERR)
 
-        self.pglog_directory = config.get("optional", "pglog_directory",1)
-        if self.pglog_directory <> '':
+        self.pglog_directory = config.get("optional", "pglog_directory")
+        if self.pglog_directory != '':
             if not os.path.isdir(self.pglog_directory):
-	        self.printit("PG log directory specified is invalid. Please remove to use postgresql.conf setting: %s" % self.pglog_directory)
+                self.printit("PG log directory specified is invalid. Please remove to use postgresql.conf setting: %s" % self.pglog_directory)
                 sys.exit(ERR)
 
         self.mail_method   = config.get('optional', 'mail_method').lower()
         # new parameter for v2.2
         self.mailx_format  = config.get('optional', 'mailx_format').lower()
-        if self.mailx_format <> 'default' and self.mailx_format <> 'custom1' and self.mailx_format <> 'custom2':
+        if self.mailx_format != 'default' and self.mailx_format != 'custom1' and self.mailx_format != 'custom2':
             self.printit("Invalid MAILX_FORMAT=%s.  Must be one of: default, custom1, custom2" % self.mailx_format)
             sys.exit(ERR)        
         
@@ -482,21 +510,21 @@ class pgmon:
             self.smtp_port = int(self.smtp_port)
         else:
             if self.mail_method == 'smtp':
-                self.printit("SMTP_PORT must be a number: %s" % self.smtp_port)
-                sys.exit(ERR)
+                 self.printit("SMTP_PORT must be a number: %s" % self.smtp_port)
+                 sys.exit(ERR)
         self.smtp_password = config.get('optional', 'smtp_password')
         self.sms           = config.get('optional', 'sms')
         
         if self.sendemail and self.mail_method == "":
             self.printit("Email alerts turned on, but no mail method selected.")
             sys.exit(ERR)        
-        elif self.mail_method <> 'mail' and self.mail_method <> 'smtp'  and self.mail_method <> 'ssmtp':
+        elif self.mail_method != 'mail' and self.mail_method != 'smtp'  and self.mail_method != 'ssmtp':
             self.printit("Email method not valid.  Choices are MAIL, SMTP, or SSMPT: %s" % self.mail_method)
             sys.exit(ERR)                
 
         if self.mail_method == 'ssmtp':
             rc = self.testcmd('ssmtp', 'ssmtp test')
-            if rc <> OK:
+            if rc != OK:
                 sys.exit(ERR)
         elif self.mail_method == 'mail':
             # see if we can use bsd version of mailx to avoid syntax problems with heirloom version
@@ -538,14 +566,15 @@ class pgmon:
         if not self.verbose:
             self.verbose = self.options.verbose
 
+        self.rds  = config.getboolean("required", "rds")
         if self.dbname == '':
-            self.dbname     = config.get("required", "dbname",1)
+            self.dbname     = config.get("required", "dbname")
         if self.dbuser == '':            
-            self.dbuser     = config.get("required", "dbuser",1)
+            self.dbuser     = config.get("required", "dbuser")
         if self.dbhost == '':                        
-            self.dbhost     = config.get("required", "dbhost",1)
+            self.dbhost     = config.get("required", "dbhost")
         if self.pgport == '':                        
-            self.pgport     = config.get("optional", "pgport",1)
+            self.pgport     = config.get("optional", "pgport")
         if self.pgport == "":
             self.pgport = "5432"
 
@@ -569,9 +598,9 @@ class pgmon:
 
         if  self.connected:
             rc = self.getdbinfo()
-            if rc <> OK:
+            if rc != OK:
                 self.cleanup(1)
-        interim = config.get("required", "minutes",1)
+        interim = config.get("required", "minutes")
         if interim == "":
             self.minutes = 0
         elif interim.isdigit():
@@ -580,7 +609,7 @@ class pgmon:
             self.printit("Invalid minutes config input(%s). Expected a positive number indicating duration minutes." % interim)
             self.cleanup(1)                
     
-        keeplogdays = config.get("optional", "keeplogdays",1)
+        keeplogdays = config.get("optional", "keeplogdays")
         if keeplogdays == "":
             self.keeplogdays = -1
         elif keeplogdays.isdigit():
@@ -589,73 +618,73 @@ class pgmon:
             self.printit("Invalid keeplogdays config input(%s). Expected a non-negative number indicating the number of days to keep pg_alert log files." % keeplogdays)
             self.cleanup(1)                    
     
-        self.lockfilter = config.get("optional", "lockfilter",1)
+        self.lockfilter = config.get("optional", "lockfilter")
     
-        value = config.get("optional", "max_alerts",1)                
+        value = config.get("optional", "max_alerts")
         if len(value) > 0 and value.isdigit():
             self.max_alerts = int(value)
 
-        value = config.get("optional", "lockwait",1)                
+        value = config.get("optional", "lockwait")
         # must be > 0 seconds
         if len(value) > 0 and value.isdigit():
             if int(value) > 0:
                 self.lockwait = int(value)            
 
-        value = config.get("optional", "tempbytesthreshold",1)                
+        value = config.get("optional", "tempbytesthreshold")
         # must be > 100K bytes
         if len(value) > 0 and value.isdigit():
             if int(value) > 100000:
                 self.tempbytesthreshold = int(value)            
 
-        value = config.get("optional", "checkinterval",1)                
+        value = config.get("optional", "checkinterval")
         # must be at least 30 seconds
         if len(value) > 0 and value.isdigit():
             if int(value) > 29:
                 self.checkinterval = int(value)
 
-        value = config.get("optional", "loadthreshold",1)                
+        value = config.get("optional", "loadthreshold")
         # must be at least 10%
         if len(value) > 0 and value.isdigit():
             if int(value) > 9:
                 self.loadthreshold = int(value)
                 
-        value = config.get("optional", "dirthreshold",1)                
+        value = config.get("optional", "dirthreshold")
         # must be < 100%
         if len(value) > 0 and value.isdigit():
             if int(value) < 100:
                 self.dirthreshold = int(value)                
                 
-        value = config.get("optional", "idletransthreshold",1)                
+        value = config.get("optional", "idletransthreshold")
         # must be > 2 seconds
         if len(value) > 0 and value.isdigit():
             if int(value) >1:
                 self.idletransthreshold = int(value)                                
                 
-        value = config.get("optional", "querytransthreshold",1)                
+        value = config.get("optional", "querytransthreshold")
         # must be > 1 seconds
         if len(value) > 0 and value.isdigit():
             if int(value) > 1:
                 self.querytransthreshold = int(value)                                          
     
-        value = config.get("optional", "pgsql_tmp_threshold",1)                
+        value = config.get("optional", "pgsql_tmp_threshold")
         if len(value) > 0 and value.isdigit():
             if int(value) > 0:
                 self.pgsql_tmp_threshold = int(value)
     
-        self.from_      = config.get("required", "from",1)                
-        self.grepfilter = config.get("optional", "grep",1)
+        self.from_      = config.get("required", "from")
+        self.grepfilter = config.get("optional", "grep")
         if self.grepfilter == '':
             pass
 
         # put states and classes in arrays
-        self.sqlstate   = config.get("optional", "sqlstate",1)
-        if self.sqlstate.strip() <> '':
+        self.sqlstate   = config.get("optional", "sqlstate")
+        if self.sqlstate.strip() != '':
             self.sqlstates  = self.sqlstate.split(",")
             for index, item in enumerate(self.sqlstates):
                 self.sqlstates[index] = item.strip()
         
-        self.sqlclass   = config.get("optional", "sqlclass",1)
-        if self.sqlclass.strip() <> '':
+        self.sqlclass   = config.get("optional", "sqlclass")
+        if self.sqlclass.strip() != '':
             self.sqlclasses = self.sqlclass.split(",")
             for index, item in enumerate(self.sqlclasses):
                 self.sqlclasses[index] = item.strip()
@@ -663,14 +692,14 @@ class pgmon:
                     # user may have accidentally put the keyword class there or something else, so regard as error
                     self.printit("sqlclass values must be numbers separated by commas.  Current value: %s" % item)
                     self.cleanup(1)                
-                elif len(self.sqlclasses[index]) <> 2:
+                elif len(self.sqlclasses[index]) != 2:
                     # assume sqlstates not valid for this session
                     #self.printit("sqlclass values must be 2 digit numbers separated by commas.  Current value: %s" % item)
                     #self.cleanup(1)                
                     pass
            
         # get command line options that override configuration file values
-        if self.options.minutes <> 0:
+        if self.options.minutes != 0:
             if self.options.minutes.isdigit():
                 self.minutes = int(self.options.minutes)
                 if self.minutes == 0:
@@ -684,9 +713,10 @@ class pgmon:
             self.printit("Invalid minutes input(%s). Expected a positive number indicating duration minutes." % self.minutes)
             self.cleanup(1)                
 
-        if not os.path.isdir(self.pglog_directory):
-            self.printit("PG log directory is invalid directory: %s" % self.pglog_directory)
-            self.cleanup(1)                
+        if not self.rds:
+            if not os.path.isdir(self.pglog_directory):
+                self.printit("PG log directory is invalid directory: %s" % self.pglog_directory)
+                self.cleanup(1)                
         if self.dbname == "":
             self.printit("Database Name must be specified (-d <dbname>)")
             self.cleanup(1)                
@@ -702,31 +732,36 @@ class pgmon:
 
         # parse log_filename to get the right PG log file to open.
         rc, log_filename = self.getlogfilename()
-        if rc <> OK:
+        if rc != OK:
             self.cleanup(1)
         self.logfile = "%s/%s" % (self.pglog_directory, log_filename)
         if not os.path.exists(self.logfile):
-            self.printit("PG log file does not exist: %s" % self.logfile)
+            if self.rds:
+                self.printit("PG log file does not exist. RDS logs are not implemented at the present time: %s" % self.logfile)
+            else:
+                self.printit("PG log file does not exist: %s" % self.logfile)            
             self.cleanup(1)    
         self.logalert     = "%s/alerts-%s.log" % (self.alert_directory,self.filedatefmt)
         self.loghistory   = "%s/alerts-history-%s.log" % (self.alert_directory,self.filedatefmt)
 
         rc = self.get_pidlock()
-        if rc <> OK:
+        if rc != OK:
             self.cleanup(rc)                
             
         # remove alert file if exists and clear out history file as well
         cmd = "echo '' > %s" % (self.logalert)
         rc,out,errs = self.executecmd(cmd,False)
-        if rc <> 0:
+        if rc != 0:
             self.cleanup(1)                
 
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                    
         msg = "%s: %s" % (now,self.version)
-        print msg
+        # fix for v3
+        #print msg
+        print (msg)
         cmd = "echo '%s' > %s" % (msg, self.loghistory)
         rc,out,errs = self.executecmd(cmd,False)  
-        if rc <> 0:
+        if rc != 0:
             self.cleanup(1)                
 
         try:
@@ -745,7 +780,7 @@ class pgmon:
         self.endd = self.startd + datetime.timedelta(0,self.seconds)
         self.end_date = self.endd.strftime("%Y-%m-%d")    
         self.end = self.endd.strftime("%Y-%m-%d %H:%M:%S")    
-        if self.end_date <> self.start_date:
+        if self.end_date != self.start_date:
             self.printit("Minutes cannot overlap days. Enter a lower minutes value or start at an earlier time of day.")
             self.printit("minutes=%d start=%s  end=%s" % (self.minutes, self.start, self.end))
             self.cleanup(1)                
@@ -754,17 +789,17 @@ class pgmon:
 	# self.log_line_prefix = '%m %u@%d[%p:%i] [%l-1] %r %a tx=%x,ss=%e: '
 	# self.log_line_prefix = '%m %u@%d[%p: %i ] %r [%a]   %e tx:%x : '
 	#                        '%t [%p]: [%l-1] %u %d %a %r %x %e:'
-	sep = "***"
-	seplen = len(sep)
-	key = sep + 'e'
-	if self.debug:
-	    self.printit("DEBUG: before replacement:'%s'" % self.log_line_prefix)
+        sep = "***"
+        seplen = len(sep)
+        key = sep + 'e'
+        if self.debug:
+            self.printit("DEBUG: before replacement:'%s'" % self.log_line_prefix)
         prefix = self.log_line_prefix.replace("%",sep)
         if self.debug:
             self.printit("DEBUG: after  replacement:'%s'" % prefix)
-	index = prefix.find(key)
-	if index > -1:
-	    index = prefix.find(key)
+        index = prefix.find(key)
+        if index > -1:
+            index = prefix.find(key)
             after = prefix[index+4:]
             # self.printit("DEBUG: after  ='%s'" % after)
             before = prefix[0:index]
@@ -781,7 +816,7 @@ class pgmon:
                 self.printit("DEBUG: prefix  ='%s'" % self.sqlstateprefix)
                 self.printit("DEBUG: postfix ='%s'" % self.sqlstatepostfix)
 
-        if (len(self.sqlstates) <> 0 or len(self.sqlclasses) <> 0) and (self.sqlstateprefix <> '' and self.sqlstatepostfix <> ''):
+        if (len(self.sqlstates) != 0 or len(self.sqlclasses) != 0) and (self.sqlstateprefix != '' and self.sqlstatepostfix != ''):
             # must be valid sqlstate checking
             self.check_sqlstate  = True                
         else:
@@ -824,7 +859,7 @@ class pgmon:
         self.verbose    = config.getboolean('required', 'verbose')
         self.debug      = config.getboolean('required', 'debug')
         self.alert_stmt_timeout = config.getboolean('optional', 'alert_stmt_timeout')
-        self.lockfilter = config.get("optional", "lockfilter",1)
+        self.lockfilter = config.get("optional", "lockfilter")
     
         self.suspended     = config.getboolean('optional', 'suspended')
         self.slaves        = config.get('optional', 'slaves')
@@ -836,53 +871,53 @@ class pgmon:
         self.ignorequeries = config.get('optional', 'ignorequeries')
         self.ignorequeries = self.ignorequeries.strip()
     
-        value = config.get("optional", "max_alerts",1)                
+        value = config.get("optional", "max_alerts")
         if len(value) > 0 and value.isdigit():
             self.max_alerts = int(value)
 
-        value = config.get("optional", "lockwait",1)                
+        value = config.get("optional", "lockwait")
         # must be > 0 seconds
         if len(value) > 0 and value.isdigit():
             if int(value) > 0:
                 self.lockwait = int(value)            
 
-        value = config.get("optional", "tempbytesthreshold",1)                
+        value = config.get("optional", "tempbytesthreshold")
         # must be > 100K bytes
         if len(value) > 0 and value.isdigit():
             if int(value) > 100000:
                 self.tempbytesthreshold = int(value)            
 
-        value = config.get("optional", "checkinterval",1)                
+        value = config.get("optional", "checkinterval")
         # must be at least 30 seconds
         if len(value) > 0 and value.isdigit():
             if int(value) > 29:
                 self.checkinterval = int(value)
 
-        value = config.get("optional", "loadthreshold",1)                
+        value = config.get("optional", "loadthreshold")
         # must be at least 10%
         if len(value) > 0 and value.isdigit():
             if int(value) > 9:
                 self.loadthreshold = int(value)
                 
-        value = config.get("optional", "dirthreshold",1)                
+        value = config.get("optional", "dirthreshold")
         # must be < 100%
         if len(value) > 0 and value.isdigit():
             if int(value) < 100:
                 self.dirthreshold = int(value)                
                 
-        value = config.get("optional", "idletransthreshold",1)                
+        value = config.get("optional", "idletransthreshold")
         # must be > 2 seconds
         if len(value) > 0 and value.isdigit():
             if int(value) >1:
                 self.idletransthreshold = int(value)                                
                 
-        value = config.get("optional", "querytransthreshold",1)                
+        value = config.get("optional", "querytransthreshold")
         # must be > 1 seconds
         if len(value) > 0 and value.isdigit():
             if int(value) > 1:
                 self.querytransthreshold = int(value)                                          
     
-        value = config.get("optional", "pgsql_tmp_threshold",1)                
+        value = config.get("optional", "pgsql_tmp_threshold")
         if len(value) > 0 and value.isdigit():
             if int(value) > 0:
                 self.pgsql_tmp_threshold = int(value)
@@ -893,14 +928,14 @@ class pgmon:
         self.sqlclasses    = []
         
         # put states and classes in arrays
-        self.sqlstate   = config.get("optional", "sqlstate",1)
-        if self.sqlstate.strip() <> '':
+        self.sqlstate   = config.get("optional", "sqlstate")
+        if self.sqlstate.strip() != '':
             self.sqlstates  = self.sqlstate.split(",")
             for index, item in enumerate(self.sqlstates):
                 self.sqlstates[index] = item.strip()
         
-        self.sqlclass   = config.get("optional", "sqlclass",1)
-        if self.sqlclass.strip() <> '':
+        self.sqlclass   = config.get("optional", "sqlclass")
+        if self.sqlclass.strip() != '':
             self.sqlclasses = self.sqlclass.split(",")
             for index, item in enumerate(self.sqlclasses):
                 self.sqlclasses[index] = item.strip()
@@ -908,13 +943,13 @@ class pgmon:
                     # user may have accidentally put the keyword class there or something else, so regard as error
                     self.printit("sqlclass values must be numbers separated by commas.  Current value: %s" % item)
                     self.cleanup(1)                
-                elif len(self.sqlclasses[index]) <> 2:
+                elif len(self.sqlclasses[index]) != 2:
                     # assume sqlstates not valid for this session
                     #self.printit("sqlclass values must be 2 digit numbers separated by commas.  Current value: %s" % item)
                     #self.cleanup(1)                
                     pass
            
-        if (len(self.sqlstates) <> 0 or len(self.sqlclasses) <> 0) and (self.sqlstateprefix <> '' and self.sqlstatepostfix <> ''):
+        if (len(self.sqlstates) != 0 or len(self.sqlclasses) != 0) and (self.sqlstateprefix != '' and self.sqlstatepostfix != ''):
             # must be valid sqlstate checking
             self.check_sqlstate  = True                
         else:
@@ -927,17 +962,17 @@ class pgmon:
     ########################
     def printit(self,message):
         if self.loghistory == '':
-            print message
+            print (message)
             return OK
-        print message
+        print (message)
         #cmd = 'echo "%s" >> %s' % (message, self.loghistory)
         cmd = 'echo \'%s\' >> %s' % (message, self.loghistory)
         # print 'cmd -->%s' % cmd
         #rc = subprocess.call(cmd, shell=True)  
         rc = subprocess.call(cmd, shell=True, executable='/bin/bash')  
-        if rc <> 0:
+        if rc != 0:
             msg = "Unable to print previous message. subprocess.call error return code = %d" % (rc)
-            print msg
+            print (msg)
             # sysmsg = "cat %s > %s\n" % (msg,self.loghistory)
             # os.system(sysmgs)
             self.cleanup(1)                
@@ -961,19 +996,19 @@ class pgmon:
             try:
                 # rc = subprocess.call(cmd, shell=True,bufsize=0)  
                 rc = subprocess.call(cmd, shell=True,bufsize=0,stdout=self.stdout, stderr=self.stderr)  
-                if rc <> 0:
+                if rc != 0:
                     self.printit("%s: executecmd.subprocess.call error rc=%d cmd=%s" % (self.start,rc, cmd))
                     return ERR,"",""
             # note, not catching subprocess.call errors for sendmail!
             except OSError:
                 self.printit( "executecmd.subprocess.call error2: %s" % str(exc))
                 return ERR,"",""
-            except Exception, exc:
+            except Exception as exc:
                 self.printit( "executecmd.subprocess.call error3: %s" % str(exc))
                 return ERR,"",""
             finally:    
                 # check stderr for errors
-                print 'checking for errors...'
+                print ('checking for errors...')
                 self.stderr.seek(0)
                 lines = self.stderr.readlines()
                 alen  = len(lines)
@@ -1060,33 +1095,33 @@ class pgmon:
             if self.verbose:
                 self.printit("Sent SMTP email from: %s to: %s. subject: %s Text = %s" % (fromaddr,toaddr,msg['Subject'],text))
     
-            if self.sms <> '':
+            if self.sms != '':
                 rc = self.sendSMSmsg(message)
                 return rc
         
-        except smtplib.SMTPServerDisconnected, e:
+        except smtplib.SMTPServerDisconnected as e:
             # exceptiontype = "SMTPServerDisconnected Error: %d %s" % (e.smtp_code, e.smtp_error)
             exceptiontype = "SMTPServerDisconnected Error: %s" % (e)
-        except smtplib.SMTPSenderRefused, e:
+        except smtplib.SMTPSenderRefused as e:
             exceptiontype = "SMTPSenderRefused Error: %s" % (e)
-        except smtplib.SMTPRecipientsRefused, e:
+        except smtplib.SMTPRecipientsRefused as e:
             exceptiontype = "SMTPRecipientsRefused Error: %s" % (e)
-        except smtplib.SMTPDataError, e:
+        except smtplib.SMTPDataError as e:
             exceptiontype = "SMTPDataError Error: %s" % (e)
-        except smtplib.SMTPHeloError, e:
+        except smtplib.SMTPHeloError as e:
             exceptiontype = "SMTPHeloError Error: %s" % (e)
-        except smtplib.SMTPAuthenticationError, e:
+        except smtplib.SMTPAuthenticationError as e:
             exceptiontype = "SMTPAuthenticationError Error: %s" % (e)
-        except smtplib.SMTPConnectError, e:
+        except smtplib.SMTPConnectError as e:
             exceptiontype = "SMTPConnectError Error: %s" % (e)
-        except smtplib.SMTPResponseException, e:
+        except smtplib.SMTPResponseException as e:
             exceptiontype = "SMTPResponseException smtplib.Error: %s" % (e)
-        except smtplib.SMTPException, e:
+        except smtplib.SMTPException as e:
             exceptiontype = "SMTPexception smtplib.Error: %s" % (e)
         except:
             exceptiontype = "GENERAL SMTP Exception"
 
-        if exceptiontype <> '':
+        if exceptiontype != '':
             amsg = "%s Error: %s" % (step, exceptiontype)
             self.printit("SMTP Send Error: %s" % amsg)
             self.printit("SMTP Error Details: TO:%s\nFROM:%s]nSUBJECT:%s\nTEXT:%s" % (fromaddr, toaddr, msg['Subject'], text))
@@ -1134,7 +1169,7 @@ class pgmon:
             if self.debug:
                 self.printit('DEBUG: default Alert Command --> %s' % cmd)
             rc,out,errs = self.executecmd(cmd,False)
-            if rc <> 0:
+            if rc != 0:
                 self.printit("MAILX Error: %d *%s* *%s*" % (rc, out, errs))
                 return ERR;
                 
@@ -1149,14 +1184,14 @@ class pgmon:
             if self.debug:
                 self.printit("DEBUG: SSMTP Alert Command --> %s" % cmd)
             rc,out,errs = self.executecmd(cmd,False)
-            if rc <> 0:
+            if rc != 0:
                 return ERR;            
         else:
             # assume SMTP
             if self.debug:
                 self.printit("DEBUG: SSMTP Alert Command --> %s" % msg)            
             rc = self.sendSMTPmsg(msg)
-            if rc <> 0:
+            if rc != 0:
                 return ERR;
 
         self.alertcnt = self.alertcnt + 1
@@ -1169,18 +1204,18 @@ class pgmon:
         # compare dbstats with current ones
         cur = self.conn.cursor()
         sql = "select datname, numbackends, conflicts, temp_bytes, deadlocks from pg_stat_database order by datname"
-	try:
-	    cur.execute(sql)
-	except psycopg2.Error, e:
+        try:
+            cur.execute(sql)
+        except psycopg2.Error as e:
             cur.close()
-	    self.printit("SQL Error: unable to retrieve db stats: %s" % (e))
-	    return ERR
+            self.printit("SQL Error: unable to retrieve db stats: %s" % (e))
+            return ERR
 
         rows = cur.fetchall()
         if not rows:
             cur.close()
-	    self.printit("PROGRAM Error: no db stats found.")
-	    return ERR
+            self.printit("PROGRAM Error: no db stats found.")
+            return ERR
 
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                    
         if len(self.dbstats) == 0:
@@ -1206,14 +1241,14 @@ class pgmon:
 
                 # now compare and issue alerts accordingly.
                 if cdatname == datname:            
-                    if conflicts  <> cconflicts:
+                    if conflicts  != cconflicts:
                         msg = "%s: db stat alert: %d conflicts detected in %s." % (now, conflicts - cconflicts, datname)
                         rc = self.sendalert(msg)
-                    if temp_bytes <> ctemp_bytes:
+                    if temp_bytes != ctemp_bytes:
                         if (ctemp_bytes - temp_bytes) > self.tempbytesthreshold:
                             msg = "%s: db stat alert: %d conflicts detected in %s." % (now, temp_bytes - ctemp_bytes, datname)
                             rc = self.sendalert(msg)                
-                    if deadlocks  <> cdeadlocks:
+                    if deadlocks  != cdeadlocks:
                         msg = "%s: db stat alert: %d deadlocks detected in %s." % (now, deadlocks - cdeadlocks, datname)
                         rc = self.sendalert(msg)                
 
@@ -1372,9 +1407,9 @@ class pgmon:
             return self.bypass
         for app in apps:
             index = msg.find(app)
-	    if index > -1:
-	        # must have already bypassed this application, so bypass it again
-	        return True
+            if index > -1:
+                # must have already bypassed this application, so bypass it again
+                return True
 
         # bypass could have already been set so send back what it was before this function started
         return self.bypass
@@ -1523,14 +1558,14 @@ class pgmon:
        # first get number of CPUs:
         cmd = "cat /proc/cpuinfo | grep processor | wc -l"
         rc, cpus, err = self.executecmd(cmd, True)
-        if rc <> 0:
+        if rc != 0:
             self.printit("Unable to get linux cpu info: %s" % err)
             return ERR, -1, 0.00, 0.00, 0.00
 
         # now get load averages for 1, 5 and 15 minute intervals
         cmd = "uptime"
         rc, out, err = self.executecmd(cmd, True)
-        if rc <> 0:
+        if rc != 0:
             self.printit("Unable to get linux load info: %s" % err)        
             return ERR, cpus, 0.00, 0.00, 0.00
         
@@ -1559,12 +1594,12 @@ class pgmon:
         cur = self.conn.cursor()
         sql = "select usename, application_name, client_addr, client_hostname, state, sent_location, write_location, " \
               "flush_location, replay_location, sync_priority, sync_state from pg_stat_replication order by application_name"
-	try:
-	    cur.execute(sql)
-	except psycopg2.Error, e:
+        try:
+            cur.execute(sql)
+        except psycopg2.Error as e:
             cur.close()
-	    self.printit("SQL Error: unable to retrieve slave stats: %s" % (e))
-	    return ERR
+            self.printit("SQL Error: unable to retrieve slave stats: %s" % (e))
+            return ERR
 
         timenow = time.time()
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                    
@@ -1574,9 +1609,9 @@ class pgmon:
             msg = "%s: No slaves active. Expected %s" % (now,self.slaves)
             if self.lastslavealert is None or int(timenow - self.lastslavealert) > self.checkinterval:
                 self.lastslavealert = time.time()            
-  	        self.printit(msg)
-	        rc = self.sendalert(msg)
-	        return OK
+                self.printit(msg)
+                rc = self.sendalert(msg)
+                return OK
 
         slaves = self.slaves.split(',')
         slavecnt = len(slaves)
@@ -1591,7 +1626,7 @@ class pgmon:
                 client_hostname  = arow[3]
                 state            = arow[4]
                 if state is None:
-	            state = ''
+                    state = ''
                 sent_location    = arow[5]
                 write_location   = arow[6]
                 flush_location   = arow[7]    
@@ -1608,21 +1643,21 @@ class pgmon:
                     self.lastslavealert = time.time()            
                     msg = "%s: Slave (%s) not active." % (now, aslave)
        	            self.printit(msg)
-	            rc = self.sendalert(msg)
-	    else:
-	        if self.verbose:
-	            msg = "%s: VERBOSE: state=%s sync_state=%s client_addr=%s application_name=%s sent_location=%s write_location=%s" \
-	                  % (now, state, sync_state, client_addr, application_name, sent_location, write_location)
-	            self.printit(msg)
+                    rc = self.sendalert(msg)
+            else:
+                if self.verbose:
+                    msg = "%s: VERBOSE: state=%s sync_state=%s client_addr=%s application_name=%s sent_location=%s write_location=%s" \
+                          % (now, state, sync_state, client_addr, application_name, sent_location, write_location)
+                    self.printit(msg)
 	            
 	        # check for replication state and lag
-                if state <> 'streaming':
+                if state != 'streaming':
                     if self.lastslavealert is None or int(timenow - self.lastslavealert) > self.checkinterval:
                         self.lastslavealert = time.time()                            
                         msg = "%s: %s slave (%s) not streaming (%s)." % (now, sync_state, aslave, state)
                         self.printit(msg)
                         rc = self.sendalert(msg)                    
-                elif sent_location <> write_location:
+                elif sent_location != write_location:
                     if self.monitorlag:
                         if self.lastslavealert is None or int(timenow - self.lastslavealert) > self.checkinterval:
                             self.lastslavealert = time.time()            
@@ -1638,18 +1673,18 @@ class pgmon:
     def checkconnections(self):
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")    
         # get total connections
-	cur = self.conn.cursor()
-	sql = "select aa.totalconnections, bb.activeconnections, cc.maxconnections from " \
-	      "(select count(*) as totalconnections from pg_stat_activity) aa, " \
-	      "(select count(*) as activeconnections from pg_stat_activity where state = 'active') bb, " \
-	      "(select setting::int as maxconnections from pg_settings where name = 'max_connections') cc;"
-	try:
-	    cur.execute(sql)
-	except psycopg2.Error, e:
-	    self.printit("SQL Error: unable to retrieve total connections: %s" % (e))
-	    return ERR
+        cur = self.conn.cursor()
+        sql = "select aa.totalconnections, bb.activeconnections, cc.maxconnections from " \
+              "(select count(*) as totalconnections from pg_stat_activity) aa, " \
+              "(select count(*) as activeconnections from pg_stat_activity where state = 'active') bb, " \
+              "(select setting::int as maxconnections from pg_settings where name = 'max_connections') cc;"
+        try:
+            cur.execute(sql)
+        except psycopg2.Error as e:
+            self.printit("SQL Error: unable to retrieve total connections: %s" % (e))
+            return ERR
 	
-	row = cur.fetchone()
+        row = cur.fetchone()
         self.totalconn   = row[0]
         self.activeconn  = row[1]
         self.maxconn     = row[2]
@@ -1679,19 +1714,19 @@ class pgmon:
               "round(EXTRACT(EPOCH FROM (now() - query_start))) > %d" % (self.idletransthreshold)
         if self.verbose:
             self.printit("%s: VERBOSE: idle in transaction query check: %s\n" % (now,sql))
-	try:
-	    cur.execute(sql)
-	except psycopg2.Error, e:
-	    self.printit("SQL Error: unable to retrieve idle in transaction transaction count: %s" % (e))
-	    return ERR
+        try:
+            cur.execute(sql)
+        except psycopg2.Error as e:
+            self.printit("SQL Error: unable to retrieve idle in transaction transaction count: %s" % (e))
+            return ERR
 	
-	rows = cur.fetchall()
-	rowcnt = cur.rowcount
-	if rowcnt > 0 and (self.lastconnidlealert is not None and int(timenow - self.lastconnidlealert) < self.checkinterval):        
-	    # bypass alerting
+        rows = cur.fetchall()
+        rowcnt = cur.rowcount
+        if rowcnt > 0 and (self.lastconnidlealert is not None and int(timenow - self.lastconnidlealert) < self.checkinterval):        
+            # bypass alerting
             pass
-	else:
-	    results = ''
+        else:
+            results = ''
             if rows:
                 self.lastconnidlealert = time.time()
                 for arow in rows:
@@ -1755,9 +1790,9 @@ class pgmon:
                     # escape string quotes
                     a1 = a1.replace("'", "''")
                     if cnt == 1:
-                        s4 = s4 + " query <> '" + a1 + "'"
+                        s4 = s4 + " query != '" + a1 + "'"
                     else:
-                        s4 = s4 + " and query <> '" + a1 + "'"
+                        s4 = s4 + " and query != '" + a1 + "'"
                     if cnt == querycnt:
                         s4 = s4 + ") "
 
@@ -1785,15 +1820,15 @@ class pgmon:
               "round(EXTRACT(EPOCH FROM (now() - query_start))) > %d" % (s1,s2,s3,s4,s5,self.querytransthreshold)
         if self.verbose:
             self.printit("%s: VERBOSE: long query check: %s\n" % (now,sql))
-	try:
-	    cur.execute(sql)
-	except psycopg2.Error, e:
-	    self.printit("SQL Error: unable to retrieve long active transaction count: %s" % (e))
-	    return ERR
+        try:
+            cur.execute(sql)
+        except psycopg2.Error as e:
+            self.printit("SQL Error: unable to retrieve long active transaction count: %s" % (e))
+            return ERR
 	
-	rows = cur.fetchall()
-	rowcnt = cur.rowcount
-	results = ''
+        rows = cur.fetchall()
+        rowcnt = cur.rowcount
+        results = ''
         if rows:
             for arow in rows:
                 pid              = arow[0]
@@ -1828,7 +1863,7 @@ class pgmon:
         # df /pgdata | tail -n1 | awk '{print $5}' --> 67%
         cmd = "df -h " + self.data_directory + " | tail -n1 | awk '{print $5}'"
         rc,data_dir_perc,errs = self.executecmd(cmd, True)
-        if rc <> 0:
+        if rc != 0:
             return ERR
 
         res = data_dir_perc.split('%')
@@ -1846,7 +1881,7 @@ class pgmon:
             pg_xlog = os.path.realpath(self.data_directory + "/pg_xlog")
             cmd = "df -h " + pg_xlog + " | tail -n1 | awk '{print $5}'"
         rc,pg_xlog_perc,errs = self.executecmd(cmd, True)
-        if rc <> 0:
+        if rc != 0:
             return ERR
         
         res = pg_xlog_perc.split('%')
@@ -1860,7 +1895,7 @@ class pgmon:
             # du -s  /pgdata/lenderx/base/pgsql_tmp | awk '{print($1)}' --> 1685752
             cmd = "du -s " + self.data_directory + "/base/pgsql_tmp | awk '{print($1)}'"
             rc, pg_temp_bytes, errs = self.executecmd(cmd, True)
-            if rc <> 0:
+            if rc != 0:
                 return ERR
         
             res = pg_temp_bytes.strip()
@@ -1868,7 +1903,7 @@ class pgmon:
             bytes = int(res)
             
             # alert if threshold reached
-            if bytes > self.pgsql_tmp_threshold and self.pgsql_tmp_threshold <> -1:
+            if bytes > self.pgsql_tmp_threshold and self.pgsql_tmp_threshold != -1:
                 threshold="{:,}".format(self.pgsql_tmp_threshold)
                 if bytes > 999999999:
                     gbs =  float(bytes)/1024/1024/1024
@@ -1889,7 +1924,7 @@ class pgmon:
     def checklinux(self):
         # get linux load
         rc, self.cpus, self.load1, self.load5, self.load15 = self.linuxload()
-        if rc <> 0:
+        if rc != 0:
             return ERR
                 
         loadthreshold = round(.01 * float(self.loadthreshold), 2)
@@ -1910,7 +1945,7 @@ class pgmon:
                 self.sendalert(msg)             
         
         rc = self.checkpgdirs()
-        if rc <> 0:
+        if rc != 0:
             return ERR        
         
         return OK    
@@ -1923,25 +1958,25 @@ class pgmon:
         if int(timenow - self.refreshed) > 900:
             rc = self.initrefresh()
             self.refreshed = time.time()
-            if rc <> 0:
+            if rc != 0:
                 return rc;        
         if self.connected:
             rc = self.checkdbstats()
-            if rc <> 0:
+            if rc != 0:
                 return rc;        
             
         rc = self.checklinux()
-        if rc <> 0:
+        if rc != 0:
             return rc;
 
         if self.connected:
             rc = self.checkconnections()
-            if rc <> 0:
+            if rc != 0:
                 return rc;        
 
         if self.connected:
             rc = self.checkslaves()
-            if rc <> 0:
+            if rc != 0:
                 return rc;                    
 
         if self.verbose:
@@ -1972,10 +2007,10 @@ class pgmon:
                         if not os.path.exists(afile):
                             # do nothing. Might be another instance trying to start and this tail never started.
                             return OK
-                        print "%s: pid=%s  name=%s" % (now, str(apid),name)
+                        print ("%s: pid=%s  name=%s" % (now, str(apid),name))
                         pidfile = open(afile, 'r')
                         info = str(pidfile.readline())
-                        print "%s: pidinfo: " % now, info
+                        print ("%s: pidinfo: " % now, info)
                         try:
                             self.printit("%s: Terminating tail pid(%s)." % (now,str(apid)))
                             p = psutil.Process(apid)
@@ -2020,12 +2055,12 @@ class pgmon:
         if self.conn is not None:
             self.conn.close()
     
-        if rc <> NOPROGLOCK:
+        if rc != NOPROGLOCK:
             rc2 = self.terminatetail()
             self.printit("%s: removing pidfile, %s" % (now,self.pidfile))
             try:
                 os.unlink(self.pidfile)
-            except OSError, e:
+            except OSError as e:
                 self.printit("%s: OSError attempting to remove pidfile, %s. %s" % (now,self.pidfile, e))
             except e:
                 self.printit("%s: Unknown exception trying to remove pid file, %s.  %s" % (now, self.pidfile, e))
@@ -2049,12 +2084,12 @@ class pgmon:
 p = pgmon()
 
 rc = p.initandvalidate()
-if rc <> 0:
+if rc != 0:
     p.cleanup(1)    
 
 # deprecated call
 # rc = get_lock(p.processname)
-# if rc <> 0:
+# if rc != 0:
 #     p.cleanup(rc)    
 
 p.showparms()
@@ -2064,7 +2099,7 @@ cmd= "timeout %d tail -f %s | grep --line-buffered '%s' > %s 2>&1 &" % (p.second
 msg = "%s: %s\n" % (p.start,cmd)
 p.printit(msg)
 rc,out,errs = p.executecmd(cmd,False)
-if rc <> 0:
+if rc != 0:
     p.cleanup(rc)    
 
 # delay for a few secs before attempting to access the alerts log file
@@ -2109,7 +2144,7 @@ while True:
                     sleepsec = sleepsec + 600                
                     time.sleep(600)
                     rc = p.checkotherstuff();
-                    if rc <> 0:
+                    if rc != 0:
                         p.printit("Errors encountered.  Program will abort.")
                         p.cleanup(1)    
         elif p.alertcnt > p.max_alerts:
@@ -2136,7 +2171,7 @@ while True:
 
                 # check for other things here
                 rc = p.checkotherstuff();
-                if rc <> 0:
+                if rc != 0:
                     p.printit("Errors encountered.  Program will abort.")
                     p.cleanup(1)    
             
@@ -2153,7 +2188,7 @@ while True:
             if p.alertvalidated(line.strip()):
                 buffcnt = buffcnt + 1    
                 rc = p.sendalert(line.strip())
-                if rc <> 0:
+                if rc != 0:
                     p.cleanup(1)    
             else:
                 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                    

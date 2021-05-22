@@ -36,7 +36,7 @@ pg_alert analyzes and alerts primarily on PG log file contents.  It also analyze
 ## Requirements
 1. Linux, no windows pg server monitoring at the present time.
 2. mail utility (mailutils)
-3. python 2.7
+3. python 2.7 and above
 4. python packages: python-psutil, psycopg2
 5. PG Log file format that does not extent to time, i.e., hours, minutes, seconds.  
 log_filename='postgresql-%Y-%m-%d.log'
@@ -129,12 +129,14 @@ yum install python-devel<br/>
 yum install mailx
 
 For python3:
-yum install python3-psycopg2<br/>
+yum install python3-psycopg2
 <br /><br />
 -- Enable the EPEL Repository in RHEL/CentOS 7 (to get python-psutil)<br/>
 wget http://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm<br/>
 rpm -ivh epel-release-latest-7.noarch.rpm<br/>
 yum install python-psutil
+or
+yum install python3-psutil
 <br /><br />
 -- Or install pip and install it like this:<br/>
 pip install psutil

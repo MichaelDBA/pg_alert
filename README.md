@@ -127,6 +127,9 @@ yum install gcc<br/>
 yum install python-psycopg2<br/>
 yum install python-devel<br/>
 yum install mailx
+
+For python3:
+yum install python3-psycopg2<br/>
 <br /><br />
 -- Enable the EPEL Repository in RHEL/CentOS 7 (to get python-psutil)<br/>
 wget http://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm<br/>

@@ -9,7 +9,7 @@ GNU V3 and MIT licenses are conveyed accordingly.
 Bugs can be reported @ michaeldba@sqlexec.com
 
 ## History
-The first version of this program was created back in 2012.  It was big and messy since the logic was based upon parsing the current PG log file.  A major rewrite was undertaken in 2016 using the new tail logic. Since then it has been uploaded to this public github repo to share with the rest of the PG community.  It has been tested extensively with Ubuntu/Debian distros using PG 9.x.  Please provide details of errors with other distros or PG versions so we can update accordingly.
+The first version of this program was created back in 2012.  It was big and messy since the logic was based upon parsing the current PG log file.  A major rewrite was undertaken in 2016 using the new tail logic. Since then it has been uploaded to this public github repo to share with the rest of the PG community.  It has been tested extensively with Ubuntu/Debian distros using PG 9.x.  Please provide details of errors with other distros or PG versions so we can update accordingly. In 2021, this program was upgraded from python 2.x to 3.x.  Python 2.x is no longer supported.
 
 ## Overview
 Most programs that monitor log files do so directly.  This program incurs a much less footprint by only monitoring the output of a provided grep command against the PG log file tail.  Here is a simple example of the grep command that will be used derived from the pg_alert configuration file:
@@ -36,7 +36,7 @@ pg_alert analyzes and alerts primarily on PG log file contents.  It also analyze
 ## Requirements
 1. Linux, no windows pg server monitoring at the present time.
 2. mail utility (mailutils)
-3. python 2.7 and above
+3. python 3.x.  Python 2.x is not longer supported.
 4. python packages: python-psutil, psycopg2
 5. PG Log file format that does not extent to time, i.e., hours, minutes, seconds.  
 log_filename='postgresql-%Y-%m-%d.log'

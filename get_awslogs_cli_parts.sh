@@ -1,6 +1,7 @@
 #!/bin/bash 
 # ./get_awslogs_cli_parts.sh <PROFILE> <DBID> <LOG FILE>
 # based on mod to this script: https://github.com/aws/aws-cli/issues/2268#issuecomment-278831175
+
 COUNTER=1
 LASTFOUNDTOKEN=0
 PREVIOUSTOKEN=0
@@ -9,6 +10,10 @@ PROFILE=$1
 DBID=$2
 SCRIPTDIR=$3
 FILE=$4
+
+LOGFILE="${SCRIPTDIR}/get_awslogs_cli_parts.log"
+exec 1>>$LOGFILE
+exec 2>&1
 
 rm -f ${SCRIPTDIR}/${FILE}
 #echo "`date +'%Y-%m-%d %H:%M:%S'`  Getting log parts for log, $FILE"

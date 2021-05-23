@@ -69,11 +69,13 @@ In these examples, pg_alert will run for 60 minutes.
 ## Details
 This section gets into the nuances of pg_alert. 
 
-There are certain parameters that need to be changed in the pg_alert.conf file:
-ALERTLOG_DIRECTORY
-DBNAME
-DBUSER
-DBHOST
+There are certain parameters that need to be changed in the pg_alert.conf file:<br/>
+ALERTLOG_DIRECTORY<br/>
+DBNAME<br/>
+DBUSER<br/>
+DBHOST<br/>
+TO<br/>
+FROM<br/>
 
 Optional parameters that may need to be changed:
 RDS=yes

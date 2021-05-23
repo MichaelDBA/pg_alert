@@ -78,7 +78,6 @@ TO<br/>
 FROM<br/>
 
 Optional parameters that may need to be changed:<br/>
-DBREMOTE=False<br/>
 RDS=False
 <br/><br/>
 It's a good idea to configure it very restrictive at first (bigger GREP statement, application, user restrictions, sqlstate/sqlclass codes) so as not to generate a lot of emails at first.  Then pull back the filtering bit by bit until you get the right kind and amount of alerts that you can work with.

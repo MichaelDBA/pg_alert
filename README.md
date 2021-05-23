@@ -33,6 +33,8 @@ The program generates 2 output files:
 
 pg_alert analyzes and alerts primarily on PG log file contents.  It also analyzes and alerts on pg session info (connections, queries, etc.) and host metrics (load, etc.).  
 
+As of version 3.0, pg_alert now works with AWS RDS and Aurora.
+
 ## Requirements
 1. Linux, no windows pg server monitoring at the present time.
 2. mail utility (mailutils)

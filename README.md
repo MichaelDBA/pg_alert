@@ -38,7 +38,7 @@ pg_alert analyzes and alerts primarily on PG log file contents.  It also analyze
 2. mail utility (mailutils)
 3. python 3.x.  Python 2.x is not longer supported.
 4. python packages: python-psutil, psycopg2
-5. PG Log file format that does not extent to time, i.e., hours, minutes, seconds.  
+5. For non-remote clusters, PG Log file format must not extent to time, i.e., hours, minutes, seconds.
 log_filename='postgresql-%Y-%m-%d.log'
 <br/>
 log_filename='postgresql-%a.log'

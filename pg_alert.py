@@ -61,7 +61,7 @@
 # 2017-12-07	Michael Vitale	  V 2.4: enable better email failure debugging with new DEBUG flag
 #                                        fixed other email related stuff
 # 2018-08-29	Michael Vitale	  V 2.5: fix mail again.  This time use different syntax for CentOS 7
-# 2021-05-22    Michael Vitale    V 3.0: upgraded from Python v2.7 to v3.0.  Python v2.x is not supported anymore
+# 2021-05-22    Michael Vitale    V 3.0: upgraded from Python v2.7 to v3.6.  Python v2.x is not supported anymore
 #                                 bunch of stricter indentation fixes
 #                                 #except socket.error, msg: --> except socket.error as msg:
 #                                 except psycopg2.Error, e:  --> except psycopg2.Error as e:    
@@ -254,6 +254,16 @@ class pgmon:
 
 
     ########################
+    def get_rdslogcomplete(self, logfilename, logfilename2):
+        # cmd = "aws rds download-db-log-file-portion --db-instance-identifier %s --log-file-name %s  --starting-token 0 --output text > %s/%s.log" % (self.dbid, logfilename, self.alert_directory, logfilename2)
+        cmd = "aws rds download-db-log-file-portion --db-instance-identifier %s --log-file-name %s  --starting-token 0 --output text > %s/%s.log" % (self.dbid, logfilename, self.alert_directory, logfilename2)
+        rc,out,errs = self.executecmd(cmd,True)  
+        if rc != 0:
+            self.printit('Unable to get rds log file. rc=%d  errs=$s' % (rc,errs))
+            return ERR
+        return OK    
+
+    ########################
     def get_rdslog(self):
         # call aws rds cli API to get the latest log file:
         cmd = 'date +%s%3N --date="1 minute ago"'
@@ -276,12 +286,10 @@ class pgmon:
         logfilename = out.strip()
         logfilename2 = logfilename.replace('error/','')
 
-        # get the log
-        cmd = "aws rds download-db-log-file-portion --db-instance-identifier %s --log-file-name %s  --starting-token 0 --output text > %s/%s.log" % (self.dbid, logfilename, self.alert_directory, logfilename2)
-        rc,out,errs = self.executecmd(cmd,True)  
+        # get the log.  This is complicated since at the current time, AWS RDS CLI only returns 2MB per call.  So we have to loop
+        rc = self.get_rdslogcomplete(logfilename, logfilename2)
         if rc != 0:
-            self.printit('Unable to get rds log file. rc=%d  errors=%s' % (rc, errs))
-            return ''                
+            return rc
         
         return logfilename
 
@@ -295,7 +303,8 @@ class pgmon:
             return NOPROGLOCK
         
         try:
-            file(self.pidfile, 'w').write(pid)
+            afile = open(self.pidfile, 'w')
+            afile.write(pid)
         except Exception as e:
             self.printit('Unable to obtain pid lock (%s)' % (e))            
             return NOPROGLOCK
@@ -439,29 +448,43 @@ class pgmon:
             self.printit("SQL Error: no glucs found.")
             self.cleanup(1)                        
 
-        for agluc in glucs:
-            if agluc[0] == 'data_directory':
-                self.data_directory = agluc[1]
-            elif agluc[0] == 'log_directory':
-                if self.pglog_directory == '':
-                    self.pglog_directory = agluc[1]
-                    if self.pglog_directory == 'pg_log' or self.pglog_directory == 'log':
-                        # need to preappend data dir
-                        self.pglog_directory = self.data_directory + '/' + self.pglog_directory
-            elif agluc[0] == 'log_line_prefix':
-                self.log_line_prefix = agluc[1]
-            elif agluc[0] == 'server_version':
-                self.pgversion = Decimal(agluc[1])
-            elif agluc[0] == 'server_version_num':
-                pass
-                # self.server_version_num = int(agluc[1])                
-                # print 'DEBUG: server version number: %d' % self.server_version_num
-            elif agluc[0] == 'log_filename':
-                self.log_filename = agluc[1]                                
-            else:
-                cur.close
-                self.printit("Program Error: Unexpected gluc: %s" % agluc[0])
-                self.cleanup(1)        
+        if self.rds:
+            # data_directory, pg log directory are not in play
+            for agluc in glucs:
+                if agluc[0] == 'log_line_prefix':
+                    self.log_line_prefix = agluc[1]
+                elif agluc[0] == 'server_version':
+                    self.pgversion = Decimal(agluc[1])
+                elif agluc[0] == 'server_version_num':
+                    pass
+                    # self.server_version_num = int(agluc[1])                
+                    # print 'DEBUG: server version number: %d' % self.server_version_num
+                elif agluc[0] == 'log_filename':
+                    self.log_filename = agluc[1]                                
+        else:    
+            for agluc in glucs:
+                if agluc[0] == 'data_directory':
+                    self.data_directory = agluc[1]
+                elif agluc[0] == 'log_directory':
+                    if self.pglog_directory == '':
+                        self.pglog_directory = agluc[1]
+                        if self.pglog_directory == 'pg_log' or self.pglog_directory == 'log':
+                            # need to preappend data dir
+                            self.pglog_directory = self.data_directory + '/' + self.pglog_directory
+                elif agluc[0] == 'log_line_prefix':
+                    self.log_line_prefix = agluc[1]
+                elif agluc[0] == 'server_version':
+                    self.pgversion = Decimal(agluc[1])
+                elif agluc[0] == 'server_version_num':
+                    pass
+                    # self.server_version_num = int(agluc[1])                
+                    # print 'DEBUG: server version number: %d' % self.server_version_num
+                elif agluc[0] == 'log_filename':
+                    self.log_filename = agluc[1]                                
+                else:
+                    cur.close
+                    self.printit("Program Error: Unexpected gluc: %s" % agluc[0])
+                    self.cleanup(1)        
                 
         self.pg_tmp = self.data_directory + '/base/pgsql_tmp'
 
@@ -508,6 +531,23 @@ class pgmon:
                  'mail_method':'', 'smtp_server':'', 'smtp_account':'', 'smtp_port':'', 'smtp_password':'', 'sms':''})        
         
         config.read(self.configfile)
+
+        self.ignore_autovacdaemon = config.getboolean('optional', 'ignore_autovacdaemon')
+        self.ignore_uservac       = config.getboolean('optional', 'ignore_uservac')
+        self.monitorlag = config.getboolean('optional', 'monitorlag')
+        self.verbose    = config.getboolean('required', 'verbose')
+        self.debug      = config.getboolean('required', 'debug')
+        self.alert_stmt_timeout = config.getboolean('optional', 'alert_stmt_timeout')
+        self.suspended   = config.getboolean('optional', 'suspended')
+        
+        self.slaves     = config.get('optional', 'slaves')
+        self.slaves      = self.slaves.strip()
+        self.ignoreusers = config.get('optional', 'ignoreusers')
+        self.ignoreusers = self.ignoreusers.strip()
+        self.ignoreapps = config.get('optional', 'ignoreapps')
+        self.ingoreapps = self.ignoreapps.strip()
+        self.ignorequeries = config.get('optional', 'ignorequeries')
+        self.ignorequeries = self.ignorequeries.strip()
         
         # fix for v3:
         #self.clusterid  = config.get("required", "clusterid",1)
@@ -578,26 +618,9 @@ class pgmon:
                 #if rc == OK:
                 #    self.mailbin ='/usr/bin/bsd-mailx'
 
-        self.printit("Using this location for mailx: %s" % self.mailbin)
+            if self.debug:
+                self.printit("DEBUG: Using this location for mailx: %s" % self.mailbin)
 
-        self.ignore_autovacdaemon = config.getboolean('optional', 'ignore_autovacdaemon')
-        self.ignore_uservac       = config.getboolean('optional', 'ignore_uservac')
-        self.monitorlag = config.getboolean('optional', 'monitorlag')
-        self.verbose    = config.getboolean('required', 'verbose')
-        self.debug      = config.getboolean('required', 'debug')
-        self.alert_stmt_timeout = config.getboolean('optional', 'alert_stmt_timeout')
-        self.suspended   = config.getboolean('optional', 'suspended')
-        
-        self.slaves     = config.get('optional', 'slaves')
-        self.slaves      = self.slaves.strip()
-        self.ignoreusers = config.get('optional', 'ignoreusers')
-        self.ignoreusers = self.ignoreusers.strip()
-        self.ignoreapps = config.get('optional', 'ignoreapps')
-        self.ingoreapps = self.ignoreapps.strip()
-        self.ignorequeries = config.get('optional', 'ignorequeries')
-        self.ignorequeries = self.ignorequeries.strip()
-        
-                
         # we only override verbose if true is passed via command line
         if not self.verbose:
             self.verbose = self.options.verbose
@@ -607,7 +630,13 @@ class pgmon:
              self.dbid = config.get("required", "dbid")
              if self.dbid == '':
                  self.printit("No RDS DBID provided.")
-                 sys.exit(ERR)                     
+                 sys.exit(ERR)
+             temp = config.get("optional", "cpus")
+             if temp is None:
+                 self.cpus = -1;
+             else:
+                 self.cpus = int(temp)
+                 
         if self.dbname == '':
             self.dbname     = config.get("required", "dbname")
         if self.dbuser == '':            
@@ -1107,7 +1136,7 @@ class pgmon:
         server.ehlo()
         server.login(fromaddr, smtp_password)
         if self.debug:
-            self.printit("DEBUG:SendSMSmsg: from: %s to: %s. subject: %s Text = %s" % (fromaddr,toaddr,msg_body))
+            self.printit("DEBUG: SendSMSmsg: from: %s to: %s. subject: %s Text = %s" % (fromaddr,toaddr,msg_body))
         server.sendmail(fromaddr, toaddr, msg_body)
         server.quit()
 
@@ -1916,6 +1945,10 @@ class pgmon:
         # df -h /pgdata | tail -n1 | awk '{print "Size="$2 ",Used=" $3 ",Avail=" $4 ",Usedpct=" $5}' --> Size=2.4T,Used=1.6T,Avail=815G,Usedpct=67%
         # df /pgdata | tail -n1 | awk '{print "Size="$2 ",Used=" $3 ",Avail=" $4 ",Usedpct=" $5}' --> Size=2541300736,Used=1687344084,Avail=853956652,Usedpct=67%
         # df /pgdata | tail -n1 | awk '{print $5}' --> 67%
+        if self.rds:
+            # nothing to do
+            return OK
+
         cmd = "df -h " + self.data_directory + " | tail -n1 | awk '{print $5}'"
         rc,data_dir_perc,errs = self.executecmd(cmd, True)
         if rc != 0:
@@ -2020,9 +2053,10 @@ class pgmon:
             if rc != 0:
                 return rc;        
             
-        rc = self.checklinux()
-        if rc != 0:
-            return rc;
+        if not self.rds:
+            rc = self.checklinux()
+            if rc != 0:
+                return rc;
 
         if self.connected:
             rc = self.checkconnections()
@@ -2037,11 +2071,19 @@ class pgmon:
         if self.verbose:
             now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                    
             if self.connected:
-                msg = "%s: VERBOSE: cpus(%d)  load1min(%.2f)  Load5min(%.2f)  Load15min(%.2f) loadthreshold(%d%%) loadmax(%.2f) maxconn=%d  totalconn=%d  activeconn=%d\n" \
-                      % (now, self.cpus, self.load1, self.load5, self.load15, self.loadthreshold, self.loadmax, self.maxconn, self.totalconn, self.activeconn)
+                if self.rds:
+                    msg = "%s: VERBOSE: cpus(%d)  maxconn=%d  totalconn=%d  activeconn=%d\n" \
+                          % (now, self.cpus, self.maxconn, self.totalconn, self.activeconn)
+                else:
+                    msg = "%s: VERBOSE: cpus(%d)  load1min(%.2f)  Load5min(%.2f)  Load15min(%.2f) loadthreshold(%d%%) loadmax(%.2f) maxconn=%d  totalconn=%d  activeconn=%d\n" \
+                          % (now, self.cpus, self.load1, self.load5, self.load15, self.loadthreshold, self.loadmax, self.maxconn, self.totalconn, self.activeconn)                
             else:
-                msg = "%s: VERBOSE: cpus(%d)  load1min(%.2f)  Load5min(%.2f)  Load15min(%.2f) loadthreshold(%d%%) loadmax(%.2f)  DB info not available.\n" \
-                      % (now, self.cpus, self.load1, self.load5, self.load15, self.loadthreshold, self.loadmax)            
+                if self.rds:
+                    msg = "%s: VERBOSE: cpus(%d)  load1min(%.2f)  Load5min(%.2f)  Load15min(%.2f) loadthreshold(%d%%) loadmax(%.2f)  DB info not available.\n" \
+                          % (now, self.cpus, self.load1, self.load5, self.load15, self.loadthreshold, self.loadmax)            
+                else:
+                    msg = "%s: VERBOSE: cpus(%d).  DB info not available.\n" \
+                          % (now, self.cpus)                            
             self.printit(msg)        
 
         return OK
@@ -2088,11 +2130,11 @@ class pgmon:
     ########################
     def showparms(self):
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                    
-        msg = '%s: verbose=%s sendmail=%s check_sqlstate=%s max_alerts=%d clusterid=%s  pgport=%s  from_=%s  to=%s  minutes=%d  keeplogdays=%d log_dir=%s alert_dir=%s data_directory=%s  ' \
+        msg = '%s: verbose=%s debug=%s rds=%s sendmail=%s check_sqlstate=%s max_alerts=%d clusterid=%s  pgport=%s  from_=%s  to=%s  minutes=%d  keeplogdays=%d log_dir=%s alert_dir=%s data_directory=%s  ' \
               'dbname=%s  dbuser=%s  dbhost=%s sqlstates=%s sqlclasses=%s prefix=***%s*** postfix=***%s*** log_line_prefix=%s lockwait=%d checkinterval=%d  loadthreshold=%d  ' \
               'dirthreshold=%d  idletransthreshold=%d querytransthreshold=%d  pgsql_tmp_threshold=%d ignore_autovacdaemon=%s ignore_uservac=%s slaves=%s ignoreapps=%s ' \
               'ignoreusers=%s monitorlag=%s alert_stmt_timeout=%s ignorequeries=%s server_version=%d suspended=%s mail_method=%s smtp_server=%s, smtp_account=%s\n' \
-              % (now,self.verbose, self.sendemail, self.check_sqlstate, self.max_alerts, self.clusterid, self.pgport, self.from_, self.to, self.minutes, self.keeplogdays, self.pglog_directory, self.alert_directory ,\
+              % (now,self.verbose, self.debug, self.rds, self.sendemail, self.check_sqlstate, self.max_alerts, self.clusterid, self.pgport, self.from_, self.to, self.minutes, self.keeplogdays, self.pglog_directory, self.alert_directory ,\
                  self.data_directory, self.dbname, self.dbuser, self.dbhost, self.sqlstates, self.sqlclasses, self.sqlstateprefix, self.sqlstatepostfix, self.log_line_prefix, \
                  self.lockwait, self.checkinterval, self.loadthreshold, self.dirthreshold, self.idletransthreshold, self.querytransthreshold, self.pgsql_tmp_threshold, \
                  self.ignore_autovacdaemon, self.ignore_uservac, self.slaves, self.ignoreapps, self.ignoreusers, self.monitorlag, self.alert_stmt_timeout, self.ignorequeries, \
@@ -2239,7 +2281,7 @@ while True:
             p.alert.seek(where)
         else:
             if p.debug:
-                p.printit("%s evaluating msg: %s" % (now, line.strip()))
+                p.printit("DEBUG: %s evaluating msg: %s" % (now, line.strip()))
             if p.alertvalidated(line.strip()):
                 buffcnt = buffcnt + 1    
                 rc = p.sendalert(line.strip())

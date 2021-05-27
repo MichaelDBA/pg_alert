@@ -1275,7 +1275,7 @@ class pgmon:
                     self.printit("%s: DEBUG: Using MAILX default format." % now)                        
                 cmd = 'echo \'%s\' | %s -s "%s" %s -a "From: %s"' % (msg, self.mailbin, subject, self.to, self.from_)
                         
-            # new custom format for 2017 redhat ec2 instance
+            # new custom format for 2017 redhat ec2 instance.  This one also works for CentOS 8.
             #echo "This is the message body" | mail -s "This is the subject" michael.vitale@datavail.com
             elif self.mailx_format == 'custom1':
                 cmd = 'echo \'%s\' | %s -s "%s" %s' % (msg, self.mailbin, subject, self.to)

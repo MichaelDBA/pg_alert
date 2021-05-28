@@ -71,7 +71,12 @@
 #                                             print msg                  --> print(msg) 
 #                                             remove deprecated import, exceptions, and replace commands with subprocess, ConhfigParser renamed to configparser
 #                                             config.get("required", "clusterid",1) --> config.get("required", "clusterid")                        
-#                                 
+#                                        TODO: change log file processing logic.  
+#                                        Currently, before RDS support, this program assumed one log file per day.
+#                                        Hence, one static grep for the main entry loop.  Now we need to support getting the latest log file, 
+#                                        which may be generated every hour or less of a given day.  So we need to refresh the grep daemon and make sure
+#                                        we are pointing to the latest pg log file for that grep.
+#                                        
 #
 ################################################################################################################
 # v3: exceptions module deprecated, also replace commands with subprocess
@@ -157,7 +162,6 @@ class pgmon:
         self.sms           = ""
 
         self.configfile    = ""
-        self.logfile       = ""
         self.logalert      = ""
         self.loghistory    = ""
         self.pidfile       = ""
@@ -210,6 +214,9 @@ class pgmon:
         self.lockwait        = 1
         self.tempbytesthreshold = 999999999999
         self.pgversion       = Decimal('0.0')
+        # logfile=/home/centos/tools/postgresql.log.2021-05-28-1900   
+        self.logfile       = ""
+        # log_filename=postgresql.log.%Y-%m-%d-%H%M        
         self.log_filename    = ''
         
         self.slaves          = ''
@@ -823,6 +830,7 @@ class pgmon:
             self.from_ = "PostgreSQL Administrator <%s@%s>" % (self.dbuser, self.dbhost)
 
         # get pg log file        
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         if self.rds:
             # need to use aws cli interface to download the latest log file. Make sure aws cli is available.
             cmd = "aws --version"
@@ -830,9 +838,7 @@ class pgmon:
             if rc != 0:
                 self.cleanup(rc)
                 
-            now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             print ("%s: aws rds cli interface is available: %s" % (now,out))
-            
             logfilename  = self.get_rdslog()
             if logfilename == '':
                 self.cleanup(rc)            
@@ -845,7 +851,8 @@ class pgmon:
             if not os.path.exists(self.logfile):
                 self.printit("PG log file does not exist: %s" % self.logfile)            
             self.cleanup(1)    
-            
+        
+        #print ("%s:  logfile=%s   log_filename=%s" % (now, self.logfile, self.log_filename))
         self.logalert     = "%s/alerts-%s.log" % (self.alert_directory,self.filedatefmt)
         self.loghistory   = "%s/alerts-history-%s.log" % (self.alert_directory,self.filedatefmt)
 

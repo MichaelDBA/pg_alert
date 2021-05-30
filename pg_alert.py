@@ -71,11 +71,14 @@
 #                                             print msg                  --> print(msg) 
 #                                             remove deprecated import, exceptions, and replace commands with subprocess, ConhfigParser renamed to configparser
 #                                             config.get("required", "clusterid",1) --> config.get("required", "clusterid")                        
-#                                        TODO: change log file processing logic.  
-#                                        Currently, before RDS support, this program assumed one log file per day.
+#                                        Major change to log file processing:
+#                                        Before RDS support, this program assumed one log file per day.
 #                                        Hence, one static grep for the main entry loop.  Now we need to support getting the latest log file, 
 #                                        which may be generated every hour or less of a given day.  So we need to refresh the grep daemon and make sure
-#                                        we are pointing to the latest pg log file for that grep.
+#                                        we are pointing to the latest pg log file for that grep.  To make sure we don't re-issue alerts for the same lines
+#                                        in refreshed log files (RDS case), we now capture the date of the last alert and make sure we only issue alerts
+#                                        for those that have occurred since the last recorded alert. For local log files, we only care if we are working with a 
+#                                        new log file.
 #                                        
 #
 ################################################################################################################
@@ -169,6 +172,7 @@ class pgmon:
         self.ignore_autovacdaemon = True
         self.ignore_uservac = True
         self.minutes       = 0 
+        self.refreshrate   = 15
         self.keeplogdays   = -1
         self.seconds       = 0
         self.startd        = datetime.datetime.now()
@@ -258,6 +262,8 @@ class pgmon:
         self.stdout               = open('/tmp/stdout', "w+")        
         self.stderr               = open('/tmp/stderr', "w+")        
         
+        self.lastalert            = ""
+        
         # db stats ordered array: datname,numbackends,conflicts,temp_bytes,deadlocks
         self.dbstats = []
 
@@ -275,7 +281,10 @@ class pgmon:
     ########################
     def get_rdslog(self):
         # call aws rds cli API to get the latest log file:
-        cmd = 'date +%s%3N --date="1 minute ago"'
+        #cmd = 'date +%s%3N --date="1 second ago"'
+        #cmd = 'date +%s%3N --date="1 minutes ago"'
+        cmd = 'date +%s%3N --date="10 seconds ago"'
+        
         rc,out,errs = self.executecmd(cmd,True)  
         if rc != 0:
             self.printit('Unable to get epoch for use with RDS CLI interface. rc=%d  errors=%s' % (rc, errs))            
@@ -296,6 +305,11 @@ class pgmon:
             return ''        
         
         logfilename = out.strip()
+        if logfilename == '':
+            now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self.printit("%s: Unable to get log file name for --file-last-written using epoch, %s.  cmd=%s" % (now,epoch, cmd))
+            return ''                
+        
         logfilename2 = logfilename.replace('error/','')
 
         # get the log.  This is complicated since at the current time, AWS RDS CLI only returns 2MB per call.  So we have to loop
@@ -305,6 +319,9 @@ class pgmon:
             
         # validate size
         cmd = "aws rds describe-db-log-files --db-instance-identifier %s --file-size 1 --filename-contains %s | grep -i size | cut -f2 -d: |  tr -d ',' | tr -d '\\\"'" % (self.dbid, logfilename2)
+        if self.debug:
+            now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            print ("%s: DEBUG: cmd=%s" % (now,cmd))
         rc,expectedsize,errs = self.executecmd(cmd,True)  
         if rc != 0:
             self.printit('Unable to get described size of PG log file, %s. rc=%d  errors=%s' % (logfilename2, rc, errs))
@@ -704,7 +721,9 @@ class pgmon:
         else:
             self.printit("Invalid minutes config input(%s). Expected a positive number indicating duration minutes." % interim)
             self.cleanup(1)                
-    
+        temp = config.get("required", "refresh")    
+        self.refreshrate = int(temp)
+        
         keeplogdays = config.get("optional", "keeplogdays")
         if keeplogdays == "":
             self.keeplogdays = -1
@@ -768,7 +787,7 @@ class pgmon:
                 self.pgsql_tmp_threshold = int(value)
     
         self.from_      = config.get("required", "from")
-        self.grepfilter = config.get("optional", "grep")
+        self.grepfilter = config.get("optional", "grepfilter")
         if self.grepfilter == '':
             pass
         self.grepexclude = config.get("optional", "grepexclude")
@@ -954,8 +973,10 @@ class pgmon:
     def initrefresh(self):
         # The only thing we can override on the command line parm is verbose.
         # We never refresh db connection parameters.  Connections last for the duration of the program.
-        self.printit("Refreshing configuration values...")
-
+        
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.printit("%s: Refreshing log and configuration values..." % now)
+            
         # re-initiate reading of config file
         config = configparser.SafeConfigParser({'sqlstate':'', 'sqlclass':'', 'lockwait':'', 'checkinterval':'', \
                  'loadthreshold':'', 'dirthreshold':'', 'idletransthreshold':'', 'querytransthreshold':'', 'pgsql_tmp_threshold':'', 'lockfilter':'', \
@@ -1070,6 +1091,18 @@ class pgmon:
         else:
             self.check_sqlstate  = False            
         
+        logfilename  = self.get_rdslog()
+        if logfilename == '':
+            return ERR
+        
+        # now kill the existing grep
+        rc = self.terminatetail()        
+        if rc != 0:
+            self.printit('Unable to terminate tail for refreshing. rc=%d' % (rc))
+            return ERR        
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                    
+        print ("%s: killed tail." % now)            
+        
         self.showparms();
         
         return OK
@@ -1105,6 +1138,7 @@ class pgmon:
                 return ERR,"",err            
             
             # remove 'b' and other nonprintable characters    
+            #print ("executecmd: out=%s   out.decode=%s" % (out, out.decode("utf-8")))
             return OK, out.decode("utf-8"), ""    
         else:
             # NOTE: subprocess.call command will not return an error for a subsequent error in the called routine, so need to handle stderr
@@ -1418,6 +1452,8 @@ class pgmon:
         if self.verbose:
             now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")        
             self.bypass = True
+            if msg == '':
+                return False
             self.printit("%s: Bypassing invalid log line: ***%s***\n" % (now,msg))
         return False
 
@@ -1644,7 +1680,7 @@ class pgmon:
         self.bypass = self.lastcheck(msg, sqlstate)
         if self.bypass:
             if self.verbose:
-                self.printit("%s: VERBOSE: bypass for msg: %s\n" % (now,msg))            
+                self.printit("%s: VERBOSE: bypass(1) for msg: %s\n" % (now,msg))            
             return False
         else:
             if self.verbose:        
@@ -1684,6 +1720,28 @@ class pgmon:
         self.bypass, sqlstate = self.sqlstatebypass(msg)
         if self.bypass:
             return False
+
+        # v3.0 feature: check if alert is older than previous one if previous one exists based on timestamp format: 2021-05-24 13:20:34 <ignore rest>
+        # self.lastalert
+        value = (msg[0:19])
+        #validate timestamp to some degree
+        x = value.replace("-", "")
+        x = x.replace(":", "")
+        x = x.replace(" ", "")
+        if not x.isdigit():
+            now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            print ("%s: WARNING: Unexpected log timestamp, %s. Unable to determine whether to bypass this log alert." % (now,msg))        
+        
+        if self.lastalert == '':
+            self.lastalert = value
+        else:
+            if value > self.lastalert:
+                pass
+            else:
+                if self.debug:
+                    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    print ("%s: DEBUG: bypassing old alert, %s" % (now,msg))
+                return False
 
         # check for obvious things like deadlocks
         # 2016-12-29 08:02:06.542 CST blackjack_prod@blackjack_prod[10513:UPDATE waiting] [3692-1] 10.80.129.86(46448) B::Backend::Job::AppraiserStatisticsCollector tx=3245985290,ss=00000: LOG:  process 10513 detected deadlock while waiting for ShareLock on transaction 3245985292 after 1000.098 ms
@@ -1858,8 +1916,8 @@ class pgmon:
         sql = "select pid, datname, usename, state, coalesce(application_name,' ') as application_name, client_addr, round(EXTRACT(EPOCH FROM (now() - query_start))) as seconds, " \
               "substring(query,1,9999) as query from pg_stat_activity where state = 'idle in transaction' and " \
               "round(EXTRACT(EPOCH FROM (now() - query_start))) > %d" % (self.idletransthreshold)
-        if self.verbose:
-            self.printit("%s: VERBOSE: idle in transaction query check: %s\n" % (now,sql))
+        #if self.debug:
+        #    self.printit("%s: DEBUG: idle in transaction query check: %s\n" % (now,sql))
         try:
             cur.execute(sql)
         except psycopg2.Error as e:
@@ -1964,8 +2022,8 @@ class pgmon:
         sql = "select pid, datname, usename, state, coalesce(application_name,' ') as application_name, client_addr, round(EXTRACT(EPOCH FROM (now() - query_start))) as seconds, " \
               "substring(query,1,9999) as query from pg_stat_activity where state = 'active' %s %s %s %s %s and " \
               "round(EXTRACT(EPOCH FROM (now() - query_start))) > %d" % (s1,s2,s3,s4,s5,self.querytransthreshold)
-        if self.verbose:
-            self.printit("%s: VERBOSE: long query check: %s\n" % (now,sql))
+        #if self.debug:
+        #    self.printit("%s: DEBUG: long query check: %s\n" % (now,sql))
         try:
             cur.execute(sql)
         except psycopg2.Error as e:
@@ -2103,13 +2161,6 @@ class pgmon:
     ########################
     def checkotherstuff(self):
 
-        # only do a refresh every 15 minutes/900 seconds
-        timenow = time.time()
-        if int(timenow - self.refreshed) > 900:
-            rc = self.initrefresh()
-            self.refreshed = time.time()
-            if rc != 0:
-                return rc;        
         if self.connected:
             rc = self.checkdbstats()
             if rc != 0:
@@ -2166,10 +2217,10 @@ class pgmon:
                         if not os.path.exists(afile):
                             # do nothing. Might be another instance trying to start and this tail never started.
                             return OK
-                        print ("%s: pid=%s  name=%s" % (now, str(apid),name))
                         pidfile = open(afile, 'r')
                         info = str(pidfile.readline())
-                        print ("%s: pidinfo: " % now, info)
+                        if self.debug:
+                            print ("%s: DEBUG: pid=%s  name=%s  pidinfo: %s" % (now, str(apid), name, info))
                         try:
                             self.printit("%s: Terminating tail pid(%s)." % (now,str(apid)))
                             p = psutil.Process(apid)
@@ -2192,15 +2243,15 @@ class pgmon:
     ########################
     def showparms(self):
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                    
-        msg = '%s: verbose=%s debug=%s rds=%s sendmail=%s check_sqlstate=%s max_alerts=%d clusterid=%s  pgport=%s  from_=%s  to=%s  minutes=%d  keeplogdays=%d log_dir=%s alert_dir=%s data_directory=%s  ' \
+        msg = '%s: verbose=%s debug=%s rds=%s sendmail=%s check_sqlstate=%s max_alerts=%d clusterid=%s  pgport=%s  from_=%s  to=%s  minutes=%d  refreshrate=%d  keeplogdays=%d log_dir=%s alert_dir=%s data_directory=%s  ' \
               'dbname=%s  dbuser=%s  dbhost=%s sqlstates=%s sqlclasses=%s prefix=***%s*** postfix=***%s*** log_line_prefix=%s lockwait=%d checkinterval=%d  loadthreshold=%d  ' \
               'dirthreshold=%d  idletransthreshold=%d querytransthreshold=%d  pgsql_tmp_threshold=%d ignore_autovacdaemon=%s ignore_uservac=%s slaves=%s ignoreapps=%s ' \
-              'ignoreusers=%s monitorlag=%s alert_stmt_timeout=%s ignorequeries=%s server_version=%d suspended=%s mail_method=%s smtp_server=%s, smtp_account=%s\n' \
-              % (now,self.verbose, self.debug, self.rds, self.sendemail, self.check_sqlstate, self.max_alerts, self.clusterid, self.pgport, self.from_, self.to, self.minutes, self.keeplogdays, self.pglog_directory, self.alert_directory ,\
+              'ignoreusers=%s monitorlag=%s alert_stmt_timeout=%s ignorequeries=%s server_version=%d suspended=%s mail_method=%s smtp_server=%s, smtp_account=%s, logfile=%s\n' \
+              % (now,self.verbose, self.debug, self.rds, self.sendemail, self.check_sqlstate, self.max_alerts, self.clusterid, self.pgport, self.from_, self.to, self.minutes, self.refreshrate, self.keeplogdays, self.pglog_directory, self.alert_directory ,\
                  self.data_directory, self.dbname, self.dbuser, self.dbhost, self.sqlstates, self.sqlclasses, self.sqlstateprefix, self.sqlstatepostfix, self.log_line_prefix, \
                  self.lockwait, self.checkinterval, self.loadthreshold, self.dirthreshold, self.idletransthreshold, self.querytransthreshold, self.pgsql_tmp_threshold, \
                  self.ignore_autovacdaemon, self.ignore_uservac, self.slaves, self.ignoreapps, self.ignoreusers, self.monitorlag, self.alert_stmt_timeout, self.ignorequeries, \
-                 self.pgversion, self.suspended, self.mail_method, self.smtp_server, self.smtp_account)
+                 self.pgversion, self.suspended, self.mail_method, self.smtp_server, self.smtp_account, self.logfile)
         self.printit(msg)
         return
 
@@ -2253,14 +2304,16 @@ if rc != 0:
 
 p.showparms()
 
+# The timeout value for the grep dictates the duration of this program instance.  
 # Start the tail of the pg log file: file format expected: postgresql-YY-MMDD.log
 #cmd= "timeout %d tail -f %s | grep --line-buffered '%s' > %s 2>&1 &" % (p.seconds, p.logfile, p.grepfilter, p.logalert)
 cmd1= "timeout %d tail -f %s | grep --line-buffered '%s' | " % (p.seconds, p.logfile, p.grepfilter)
-cmd2= "grep --line-buffered -v '%s' > %s 2>&1 &" % (p.grepexclude, p.logalert)
-cmd=cmd1 + cmd2
-msg = "%s: %s\n" % (p.start,cmd)
-p.printit('GREP=%s' % msg)
-rc,out,errs = p.executecmd(cmd,False)
+#cmd2= "grep --line-buffered -v '%s' > %s 2>&1 &" % (p.grepexclude, p.logalert)
+cmd2= "grep --line-buffered -v '%s' >> %s 2>&1 &" % (p.grepexclude, p.logalert)
+grepcmd=cmd1 + cmd2
+msg = "%s: %s\n" % (p.start,grepcmd)
+p.printit('%s' % msg)
+rc,out,errs = p.executecmd(grepcmd,False)
 if rc != 0:
     p.cleanup(rc)    
 
@@ -2283,6 +2336,14 @@ while True:
     buffcnt  = 0
     sleepsec = 0
     while True:
+        ##########################################################################################################################
+        # loop with a refresh every REFRESH RATE mins and make sure we are pointing to the current logfile.
+        # For RDS, we have to always download the latest log file.  If the log file is different, we point to the beginning of it.
+        # If the log file is the same we get the date of the last alert sent out. If none there we simply do the grep again
+        # against the same file.  Otherwise check the date of an ensuing alert and make sure the date of it is > than date
+        # of last alert sent out.
+        # For local log file, we already have it and don't need to get do anything, unless it's a new log file.
+        ##########################################################################################################################
         if tailfinished:
             break
         # sleep 1 sec between each iteration
@@ -2296,6 +2357,28 @@ while True:
         delta = round(now - buffstart)
         # p.printit("delta=%d  buffcnt=%d" % (delta,buffcnt))
         p.bypass = False
+        
+        # only do a refresh every refreshrate minutes/900 seconds
+        #if int(now - p.refreshed) > 900:
+        if int(now - p.refreshed) > (p.refreshrate * 60):
+            rc = p.initrefresh()
+            p.refreshed = time.time()
+            if rc != 0:
+                p.printit("Errors encountered.  Program will abort.")
+                p.cleanup(1)    
+            
+            # Restart the grep tail again with perhaps a new logfile
+            cmd1= "timeout %d tail -f %s | grep --line-buffered '%s' | " % (p.seconds, p.logfile, p.grepfilter)
+            cmd2= "grep --line-buffered -v '%s' >> %s 2>&1 &" % (p.grepexclude, p.logalert)
+            grepcmd=cmd1 + cmd2
+            now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")    
+            msg = "%s: Restarting grep tail... %s\n" % (now,grepcmd)
+            p.printit('%s' % msg)
+            rc,out,errs = p.executecmd(grepcmd,False)
+            if rc != 0:
+                p.printit("FATAL ERROR: Unable to restart the grep tail.")
+                p.cleanup(rc)    
+        
         if delta < 60:
             if buffcnt > 20:
                 # too much activity in short duration, back off for awhile, but notify admin
@@ -2345,20 +2428,24 @@ while True:
                 tailfinished = 1
             p.alert.seek(where)
         else:
-            if p.debug:
-                now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                p.printit("%s: DEBUG: evaluating msg: %s" % (now, line.strip()))
-            if p.alertvalidated(line.strip()):
-                buffcnt = buffcnt + 1    
-                rc = p.sendalert(line.strip())
-                if rc != 0:
-                    p.cleanup(1)    
+            # for some reason with the change from ">" to ">>" to the alert log, we get an initial 1 byte of nothingness
+            if line.strip() == '':
+                pass
             else:
-                now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                    
-                if p.bypass:
-                    if p.verbose:
-                        p.printit("%s: VERBOSE: bypass for %s\n" % (now,line.strip()))
-                # pass
+                if p.debug:
+                    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    p.printit("%s: DEBUG: evaluating msg: %s" % (now, line.strip()))
+                if p.alertvalidated(line.strip()):
+                    buffcnt = buffcnt + 1    
+                    rc = p.sendalert(line.strip())
+                    if rc != 0:
+                        p.cleanup(1)    
+                else:
+                    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                    
+                    if p.bypass:
+                        if p.verbose:
+                            p.printit("%s: VERBOSE: bypass(2) for %s\n" % (now,line.strip()))
+                    # pass
                 
 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")    
 p.printit("%s: Daily Monitoring ending. %d alert(s) detected." % (now, p.alertcnt))

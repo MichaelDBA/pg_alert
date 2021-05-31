@@ -22,8 +22,8 @@ The ensuing output is what pg_alert monitors. So, we have 2 processes:
 <br/>
 * pg_alert
 <br/>
-* grepping the PG log file tail
-<br/><br/>
+* grepping the PG log file
+<br/>
 
 The configuration file, **pg_alert.conf**, is where all the filtering is done on the resulting grepped tail output of the PG log file.  This configuration file contains detailed comments about each configurable field.
 

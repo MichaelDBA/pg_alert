@@ -61,7 +61,7 @@
 # 2017-12-07	Michael Vitale	  V 2.4: enable better email failure debugging with new DEBUG flag
 #                                        fixed other email related stuff
 # 2018-08-29	Michael Vitale	  V 2.5: fix mail again.  This time use different syntax for CentOS 7
-# 2021-05-24    Michael Vitale    V 3.0: added AWS RDS support
+# 2021-05-31    Michael Vitale    V 3.0: added AWS RDS support
 #                                        added grep exclusion logic
 #                                        upgraded from Python v2.7 to v3.6.  Python v2.x is not supported anymore
 #                                             bunch of stricter indentation fixes
@@ -72,14 +72,12 @@
 #                                             remove deprecated import, exceptions, and replace commands with subprocess, ConhfigParser renamed to configparser
 #                                             config.get("required", "clusterid",1) --> config.get("required", "clusterid")                        
 #                                        Major change to log file processing:
-#                                        Before RDS support, this program assumed one log file per day.
-#                                        Hence, one static grep for the main entry loop.  Now we need to support getting the latest log file, 
-#                                        which may be generated every hour or less of a given day.  So we need to refresh the grep daemon and make sure
-#                                        we are pointing to the latest pg log file for that grep.  To make sure we don't re-issue alerts for the same lines
-#                                        in refreshed log files (RDS case), we now capture the date of the last alert and make sure we only issue alerts
-#                                        for those that have occurred since the last recorded alert. For local log files, we only care if we are working with a 
-#                                        new log file.
-#                                        
+#                                        Before RDS support, this program assumed one log file per day. Hence, one static grep for the main entry loop.  
+#                                        Now we support getting the latest log file every refreshrate period of time. 
+#                                        This requires to restart the GREP daemon after gettting/refreshing the lastest pg log file.
+#                                        To make sure we don't re-issue alerts for the same lines after refreshing, especially in the RDS case, 
+#                                        we now capture the date of the last alert and make sure we only issue alerts for those that have occurred since the last recorded alert. 
+#                                        For local log files, we only care if we are working with a new log file, since we have a direct link to the log file in the data directory.
 #
 ################################################################################################################
 # v3: exceptions module deprecated, also replace commands with subprocess
@@ -280,39 +278,65 @@ class pgmon:
 
     ########################
     def get_rdslog(self):
-        # call aws rds cli API to get the latest log file:
-        #cmd = 'date +%s%3N --date="1 second ago"'
-        #cmd = 'date +%s%3N --date="1 minutes ago"'
-        cmd = 'date +%s%3N --date="10 seconds ago"'
+
+        # sometimes we get multiple logs at time of moving to another log so try a couple times with changing epoch
+        i = 0
+        lasterr = ''
+        while True:
+            i = i + 1    
+            if i == 4:
+                break
+                
+            # call aws rds cli API to get the latest log file:
+            if i == 1:
+                cmd = 'date +%s%3N --date="1 seconds ago"'
+            elif i == 2:
+                cmd = 'date +%s%3N --date="10 seconds ago"'
+            elif i == 3:    
+                cmd = 'date +%s%3N --date="1 minutes ago"'
+                
+            rc,out,errs = self.executecmd(cmd,True)  
+            if rc != 0:
+                lasterr = 'Unable to get epoch for use with RDS CLI interface. rc=%d  errors=%s' % (rc, errs)
+                self.printit(lasterr)
+                continue
+            epoch = out.rstrip("\n")
+            now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self.printit ("%s: Using epoch=%s to get the latest RDS log." % (now,epoch))
         
-        rc,out,errs = self.executecmd(cmd,True)  
-        if rc != 0:
-            self.printit('Unable to get epoch for use with RDS CLI interface. rc=%d  errors=%s' % (rc, errs))            
+            # get the name of the most recent log file
+            #cmd = "aws rds describe-db-log-files --db-instance-identifier %s --file-size 1 --file-last-written %s" % (self.dbid, out)
+            cmd = "aws rds describe-db-log-files --db-instance-identifier %s --file-size 1 --file-last-written %s | grep -i logfilename | cut -f2 -d: |  tr -d ',' | tr -d '\\\"'"   % (self.dbid, epoch)
+            if self.debug:
+                now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                print ("%s: DEBUG: cmd=%s" % (now,cmd))
+            rc,out,errs = self.executecmd(cmd,True)  
+            if rc != 0:
+                lasterr = 'Unable to get name of most recent rds log file. rc=%d  errors=%s' % (rc, errs)
+                self.printit(lasterr)
+                continue
+        
+            logfilename = out.strip()
+            if logfilename == '':
+                now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                lasterr = "%s: Unable to get log file name for --file-last-written using epoch, %s.  cmd=%s" % (now,epoch, cmd)
+                if i < 3:
+                    lasterr = lasterr + ' Retrying...'
+                self.printit(lasterr)
+                continue
+
+            # if we get here we must have succeeded
+            lasterr = ''
+            break
+
+        if lasterr != '':
+            self.sendalert(lasterr)    
             return ''
-        epoch = out.rstrip("\n")
-        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        print ("%s: Using epoch=%s to get the latest RDS log." % (now,epoch))
-        
-        # get the name of the most recent log file
-        #cmd = "aws rds describe-db-log-files --db-instance-identifier %s --file-size 1 --file-last-written %s" % (self.dbid, out)
-        cmd = "aws rds describe-db-log-files --db-instance-identifier %s --file-size 1 --file-last-written %s | grep -i logfilename | cut -f2 -d: |  tr -d ',' | tr -d '\\\"'"   % (self.dbid, epoch)
-        if self.debug:
-            now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            print ("%s: DEBUG: cmd=%s" % (now,cmd))
-        rc,out,errs = self.executecmd(cmd,True)  
-        if rc != 0:
-            self.printit('Unable to get name of most recent rds log file. rc=%d  errors=%s' % (rc, errs))            
-            return ''        
-        
-        logfilename = out.strip()
-        if logfilename == '':
-            now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            self.printit("%s: Unable to get log file name for --file-last-written using epoch, %s.  cmd=%s" % (now,epoch, cmd))
-            return ''                
         
         logfilename2 = logfilename.replace('error/','')
 
         # get the log.  This is complicated since at the current time, AWS RDS CLI only returns 2MB per call.  So we have to loop
+        self.printit ("%s: Downloading log file parts for log, %s" % (now,logfilename2))
         rc = self.get_rdslogcomplete(logfilename, logfilename2)
         if rc != 0:
             return rc
@@ -328,12 +352,15 @@ class pgmon:
             return ''        
         
         expectedsize = expectedsize.strip()
+        oldlogfile = self.logfile
         self.logfile = self.alert_directory + '/' + logfilename2
         actualsize = os.path.getsize(self.logfile)
         
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                    
-        print ("%s: logfile=%s  expected size=%s  actual size=%d" % (now, self.logfile, expectedsize, actualsize))
-        
+        if oldlogfile == self.logfile:
+            self.printit ("%s: Using same log file. logfile=%s  expected size=%s  actual size=%d" % (now, self.logfile, expectedsize, actualsize))
+        else:
+            self.printit ("%s: Using new log file. logfile=%s  expected size=%s  actual size=%d" % (now, self.logfile, expectedsize, actualsize))
         return logfilename2
 
     ########################
@@ -362,6 +389,7 @@ class pgmon:
         parser.add_option("-u","--dbuser",dest="dbuser", help="database user", default="",metavar="DBUSER")
         parser.add_option("-s","--dbhost",dest="dbhost", help="database host", default="",metavar="DBHOST")
         parser.add_option("-v","--verbose",dest="verbose",help="optional parameter indicating whether verbose messaging is turned on. Default is false",metavar="verbose", default=False, action="store_true")
+        parser.add_option("-b","--debug",dest="debug",help="optional parameter indicating whether debug messaging is turned on. Default is false",metavar="debug", default=False, action="store_true")
         return parser
 
     ##########################
@@ -664,9 +692,11 @@ class pgmon:
                 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 self.printit("%s: DEBUG: Using this location for mailx: %s" % (now, self.mailbin))
 
-        # we only override verbose if true is passed via command line
+        # we only override verbose and debug if true is passed via command line
         if not self.verbose:
             self.verbose = self.options.verbose
+        if not self.debug:
+            self.debug = self.options.debug            
 
         self.rds  = config.getboolean("required", "rds")
         if self.rds:
@@ -857,7 +887,7 @@ class pgmon:
             if rc != 0:
                 self.cleanup(rc)
                 
-            print ("%s: aws rds cli interface is available: %s" % (now,out))
+            self.printit ("%s: aws rds cli interface is available: %s" % (now,out))
             logfilename  = self.get_rdslog()
             if logfilename == '':
                 self.cleanup(rc)            
@@ -889,7 +919,7 @@ class pgmon:
         msg = "%s: %s" % (now,self.version)
         # fix for v3
         #print msg
-        print (msg)
+        self.printit (msg)
         cmd = "echo '%s' > %s" % (msg, self.loghistory)
         rc,out,errs = self.executecmd(cmd,False)  
         if rc != 0:
@@ -971,7 +1001,7 @@ class pgmon:
 
     ##########################
     def initrefresh(self):
-        # The only thing we can override on the command line parm is verbose.
+        # The only thing we can override on the command line parm is verbose and debug.
         # We never refresh db connection parameters.  Connections last for the duration of the program.
         
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -985,9 +1015,11 @@ class pgmon:
                  'mail_method':'', 'smtp_server':'', 'smtp_account':'', 'smtp_port':'', 'smtp_password':'', 'sms':''})                         
         config.read(self.configfile)
 
-        # do not override verbose if provided by command line
+        # override verbose and debug if provided by command line
         if not self.verbose:
             self.verbose = self.options.verbose
+        if not self.debug:
+            self.debug = self.options.debug            
 
         self.ignore_autovacdaemon = config.getboolean('optional', 'ignore_autovacdaemon')
         self.ignore_uservac       = config.getboolean('optional', 'ignore_uservac')
@@ -1101,7 +1133,8 @@ class pgmon:
             self.printit('Unable to terminate tail for refreshing. rc=%d' % (rc))
             return ERR        
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                    
-        print ("%s: killed tail." % now)            
+        if self.debug:
+            print ("%s: DEBUG: killed tail." % now)            
         
         self.showparms();
         
@@ -1160,7 +1193,7 @@ class pgmon:
             finally:    
                 # check stderr for errors
                 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                    
-                print ('%s: checking for errors...' % now)
+                self.printit ('%s: checking for errors...' % now)
                 self.stderr.seek(0)
                 lines = self.stderr.readlines()
                 alen  = len(lines)
@@ -1511,6 +1544,10 @@ class pgmon:
                 self.printit("%s: VERBOSE: could not find beginning of sqlstate, *%s*, in msg, %s\n" % (now, self.sqlstateprefix, msg))
             return ""
         s1 = msg[pos+len(self.sqlstateprefix):]            
+        if not self.check_sqlstate and s1 == '':
+            # nothing to do 
+            return ""
+        
         # print "DEBUG1: pos=%d prefix=%s s1=%s" % (pos,self.sqlstateprefix, s1)
         pos = s1.find(self.sqlstatepostfix)
         if pos < 0:
@@ -1519,7 +1556,8 @@ class pgmon:
                 self.printit("%s: VERBOSE: could not find end of sqlstate in msg, %s\n" % (now, msg))        
             return ""
         s1 = s1[0:pos]
-        # print "DEBUG2: s1=%s" % s1
+        
+        #print ("DEBUG2: s1=%s" % s1)
         s1 = s1.strip()
         # v2.1 enhancement: turn off sqlchecking if log_line_prefix is not setup up correctly resulting in an sqlstate that is not alphanumeric
         if not s1.isalnum():
@@ -1730,7 +1768,7 @@ class pgmon:
         x = x.replace(" ", "")
         if not x.isdigit():
             now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            print ("%s: WARNING: Unexpected log timestamp, %s. Unable to determine whether to bypass this log alert." % (now,msg))        
+            self.printit ("%s: WARNING: Unexpected log timestamp, %s. Unable to determine whether to bypass this log alert." % (now,msg))        
         
         if self.lastalert == '':
             self.lastalert = value
@@ -1740,7 +1778,7 @@ class pgmon:
             else:
                 if self.debug:
                     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    print ("%s: DEBUG: bypassing old alert, %s" % (now,msg))
+                    self.printit ("%s: DEBUG: bypassing old alert, %s" % (now,msg))
                 return False
 
         # check for obvious things like deadlocks

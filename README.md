@@ -21,7 +21,6 @@ Most programs that monitor log files do so directly.  This program incurs a much
 The ensuing output is what pg_alert monitors. So, we have 2 processes:
 <br/>
 * pg_alert
-<br/>
 * grepping the PG log file
 <br/>
 

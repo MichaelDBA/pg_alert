@@ -598,7 +598,7 @@ class pgmon:
                  'loadthreshold':'', 'dirthreshold':'', 'idletransthreshold':'', 'querytransthreshold':'', 'pgsql_tmp_threshold':'', 'lockfilter':'', \
                  'pglog_directory':'', 'alert_directory':'', 'ignore_autovacdaemon':'True', 'ignore_uservac':'True', 'tempbytesthreshold':'', 'slaves':'', \
                  'monitorlag':'False', 'alert_stmt_timeout':'False', 'ignoreapps':'', 'ignoreusers':'','ignorequeries':'', 'suspended':'False', \
-                 'mail_method':'', 'smtp_server':'', 'smtp_account':'', 'smtp_port':'', 'smtp_password':'', 'sms':''})        
+                 'mail_method':'', 'smtp_server':'', 'smtp_account':'', 'smtp_port':'', 'smtp_password':'', 'sms':'', 'grepfilter':'', 'grepexclude':''})
         
         config.read(self.configfile)
 
@@ -1012,8 +1012,11 @@ class pgmon:
                  'loadthreshold':'', 'dirthreshold':'', 'idletransthreshold':'', 'querytransthreshold':'', 'pgsql_tmp_threshold':'', 'lockfilter':'', \
                  'pglog_directory':'', 'alert_directory':'', 'ignore_autovacdaemon':'True', 'ignore_uservac':'True', 'tempbytesthreshold':'', 'slaves':'', \
                  'monitorlag':'False', 'alert_stmt_timeout':'False', 'ignoreapps':'', 'ignoreusers':'','ignorequeries':'', 'suspended':'False', \
-                 'mail_method':'', 'smtp_server':'', 'smtp_account':'', 'smtp_port':'', 'smtp_password':'', 'sms':''})                         
+                 'mail_method':'', 'smtp_server':'', 'smtp_account':'', 'smtp_port':'', 'smtp_password':'', 'sms':'', 'grepfilter':'', 'grepexclude':''})
         config.read(self.configfile)
+
+        self.grepfilter  = config.get("optional", "grepfilter")
+        self.grepexclude = config.get("optional", "grepexclude")
 
         # override verbose and debug if provided by command line
         if not self.verbose:

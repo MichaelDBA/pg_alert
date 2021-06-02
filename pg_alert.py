@@ -77,6 +77,7 @@
 #                                        This requires to restart the GREP daemon after gettting/refreshing the lastest pg log file.
 #                                        To make sure we don't re-issue alerts for the same lines after refreshing, especially in the RDS case, 
 #                                        we now capture the date of the last alert and make sure we only issue alerts for those that have occurred since the last recorded alert. 
+#                                        This only works for the current session.  It does not carry-over into ensuing sessions.
 #                                        For local log files, we only care if we are working with a new log file, since we have a direct link to the log file in the data directory.
 #
 ################################################################################################################
@@ -218,6 +219,7 @@ class pgmon:
         self.pgversion       = Decimal('0.0')
         # logfile=/home/centos/tools/postgresql.log.2021-05-28-1900   
         self.logfile       = ""
+        self.oldlogfile    = ""
         # log_filename=postgresql.log.%Y-%m-%d-%H%M        
         self.log_filename    = ''
         
@@ -269,7 +271,7 @@ class pgmon:
     ########################
     def get_rdslogcomplete(self, logfilename, logfilename2):
         # cmd = "aws rds download-db-log-file-portion --db-instance-identifier %s --log-file-name %s  --starting-token 0 --output text > %s/%s.log" % (self.dbid, logfilename, self.alert_directory, logfilename2)
-        cmd = "%s/get_awslogs_cli_parts.sh NA %s %s %s" % (self.alert_directory, self.dbid, self.alert_directory, logfilename2)
+        cmd = "%s/get_awslogs_cli_partsX.sh 100 NA %s %s %s" % (self.alert_directory, self.dbid, self.alert_directory, logfilename2)
         rc,out,errs = self.executecmd(cmd,True)  
         if rc != 0:
             self.printit('Unable to get complete rds log file. rc=%d  errs=$s' % (rc,errs))
@@ -352,12 +354,12 @@ class pgmon:
             return ''        
         
         expectedsize = expectedsize.strip()
-        oldlogfile = self.logfile
+        self.oldlogfile = self.logfile
         self.logfile = self.alert_directory + '/' + logfilename2
         actualsize = os.path.getsize(self.logfile)
         
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                    
-        if oldlogfile == self.logfile:
+        if self.oldlogfile == self.logfile:
             self.printit ("%s: Using same log file. logfile=%s  expected size=%s  actual size=%d" % (now, self.logfile, expectedsize, actualsize))
         else:
             self.printit ("%s: Using new log file. logfile=%s  expected size=%s  actual size=%d" % (now, self.logfile, expectedsize, actualsize))
@@ -832,6 +834,10 @@ class pgmon:
                 self.sqlstates[index] = item.strip()
         
         self.sqlclass   = config.get("optional", "sqlclass")
+        
+        if self.sqlstate == "" and self.sqlclass == "":
+            self.check_sqlstate = False
+        
         if self.sqlclass.strip() != '':
             self.sqlclasses = self.sqlclass.split(",")
             for index, item in enumerate(self.sqlclasses):
@@ -982,6 +988,7 @@ class pgmon:
 
         if (len(self.sqlstates) != 0 or len(self.sqlclasses) != 0) and (self.sqlstateprefix != '' and self.sqlstatepostfix != ''  and self.sqlstate != ''):
             # must be valid sqlstate checking
+            print ("Setting check sqlstate = TRUE")
             self.check_sqlstate  = True                
         else:
             self.check_sqlstate  = False            
@@ -1126,18 +1133,19 @@ class pgmon:
         else:
             self.check_sqlstate  = False            
         
+        self.oldlogfile = self.logfile
         logfilename  = self.get_rdslog()
         if logfilename == '':
             return ERR
         
-        # now kill the existing grep
+        # now kill the existing grep since a refresh of the log file even if same log file, will invalidate the tail.
         rc = self.terminatetail()        
         if rc != 0:
             self.printit('Unable to terminate tail for refreshing. rc=%d' % (rc))
             return ERR        
-        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                    
         if self.debug:
-            print ("%s: DEBUG: killed tail." % now)            
+            now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                                
+            print ("%s: DEBUG: Killed existing tail." % now)            
         
         self.showparms();
         
@@ -1547,8 +1555,8 @@ class pgmon:
                 self.printit("%s: VERBOSE: could not find beginning of sqlstate, *%s*, in msg, %s\n" % (now, self.sqlstateprefix, msg))
             return ""
         s1 = msg[pos+len(self.sqlstateprefix):]            
-        if not self.check_sqlstate and s1 == '':
-            # nothing to do 
+        if not self.check_sqlstate:
+            # nothing to do         
             return ""
         
         # print "DEBUG1: pos=%d prefix=%s s1=%s" % (pos,self.sqlstateprefix, s1)
@@ -1777,7 +1785,7 @@ class pgmon:
             self.lastalert = value
         else:
             if value > self.lastalert:
-                pass
+                self.lastalert = value
             else:
                 if self.debug:
                     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -2226,17 +2234,18 @@ class pgmon:
             now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                    
             if self.connected:
                 if self.rds:
-                    msg = "%s: VERBOSE: cpus(%d)  maxconn=%d  totalconn=%d  activeconn=%d\n" \
+                    # msg = "%s: VERBOSE: cpus(%d)  maxconn=%d  totalconn=%d  activeconn=%d\n" \
+                    msg = "%s: VERBOSE: cpus(%d)  maxconn=%d  totalconn=%d  activeconn=%d" \
                           % (now, self.cpus, self.maxconn, self.totalconn, self.activeconn)
                 else:
-                    msg = "%s: VERBOSE: cpus(%d)  load1min(%.2f)  Load5min(%.2f)  Load15min(%.2f) loadthreshold(%d%%) loadmax(%.2f) maxconn=%d  totalconn=%d  activeconn=%d\n" \
+                    msg = "%s: VERBOSE: cpus(%d)  load1min(%.2f)  Load5min(%.2f)  Load15min(%.2f) loadthreshold(%d%%) loadmax(%.2f) maxconn=%d  totalconn=%d  activeconn=%d" \
                           % (now, self.cpus, self.load1, self.load5, self.load15, self.loadthreshold, self.loadmax, self.maxconn, self.totalconn, self.activeconn)                
             else:
                 if self.rds:
-                    msg = "%s: VERBOSE: cpus(%d)  load1min(%.2f)  Load5min(%.2f)  Load15min(%.2f) loadthreshold(%d%%) loadmax(%.2f)  DB info not available.\n" \
+                    msg = "%s: VERBOSE: cpus(%d)  load1min(%.2f)  Load5min(%.2f)  Load15min(%.2f) loadthreshold(%d%%) loadmax(%.2f)  DB info not available." \
                           % (now, self.cpus, self.load1, self.load5, self.load15, self.loadthreshold, self.loadmax)            
                 else:
-                    msg = "%s: VERBOSE: cpus(%d).  DB info not available.\n" \
+                    msg = "%s: VERBOSE: cpus(%d).  DB info not available." \
                           % (now, self.cpus)                            
             self.printit(msg)        
 
@@ -2346,12 +2355,30 @@ if rc != 0:
 p.showparms()
 
 # The timeout value for the grep dictates the duration of this program instance.  
+# we always grep the log file and then tail it.
+#cmd= "timeout %d tail -f %s | grep --line-buffered '%s' > %s 2>&1 &" % (p.seconds, p.logfile, p.grepfilter, p.logalert)
+cmd1= "cat %s | grep --line-buffered '%s' | " % (p.logfile, p.grepfilter)
+cmd2= "grep --line-buffered -v '%s' >> %s 2>&1 &" % (p.grepexclude, p.logalert)
+grepcmd=cmd1 + cmd2
+now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")    
+msg = "%s: Grepping initial pg log file, %s" % (now, p.logfile)
+p.printit('%s' % msg)
+msg = "%s: %s\n" % (p.start,grepcmd)
+p.printit('%s' % msg)
+rc,out,errs = p.executecmd(grepcmd,False)
+if rc != 0:
+    p.printit('FATAL: Unable to grep initial pg log file.' % msg)
+    p.cleanup(rc)    
+
 # Start the tail of the pg log file: file format expected: postgresql-YY-MMDD.log
 #cmd= "timeout %d tail -f %s | grep --line-buffered '%s' > %s 2>&1 &" % (p.seconds, p.logfile, p.grepfilter, p.logalert)
 cmd1= "timeout %d tail -f %s | grep --line-buffered '%s' | " % (p.seconds, p.logfile, p.grepfilter)
 #cmd2= "grep --line-buffered -v '%s' > %s 2>&1 &" % (p.grepexclude, p.logalert)
 cmd2= "grep --line-buffered -v '%s' >> %s 2>&1 &" % (p.grepexclude, p.logalert)
 grepcmd=cmd1 + cmd2
+now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")    
+msg = "%s: Tailing initial pg log file, %s" % (now, p.logfile)
+p.printit('%s' % msg)
 msg = "%s: %s\n" % (p.start,grepcmd)
 p.printit('%s' % msg)
 rc,out,errs = p.executecmd(grepcmd,False)
@@ -2408,7 +2435,23 @@ while True:
                 p.printit("Errors encountered.  Program will abort.")
                 p.cleanup(1)    
             
-            # Restart the grep tail again with perhaps a new logfile
+            # At this point, we have killed the existing tail if we are working with a new pg log file.
+            # grep new file once and then start the tail again.  Otherwise do nothing, the tail on existing file is ok.
+            # It appears we have to always grep the log file for RDS and just trust the timestamp logic about not reissuing same alert again.
+            #if p.oldlogfile != p.logfile:
+            if p.rds:
+                # we need to grep the new log file
+                now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")    
+                cmd1= "cat %s | grep --line-buffered '%s' | " % (p.logfile, p.grepfilter)
+                cmd2= "grep --line-buffered -v '%s' >> %s 2>&1 &" % (p.grepexclude, p.logalert)                
+                grepcmd=cmd1 + cmd2
+                msg = "%s: grepping new log file... %s\n" % (now,grepcmd)
+                rc,out,errs = p.executecmd(grepcmd,False)
+                if rc != 0:
+                    p.printit("FATAL ERROR: Unable to grep new pg log file, %s" % p.logfile)
+                    p.cleanup(rc)    
+
+            # start the new tail
             cmd1= "timeout %d tail -f %s | grep --line-buffered '%s' | " % (p.seconds, p.logfile, p.grepfilter)
             cmd2= "grep --line-buffered -v '%s' >> %s 2>&1 &" % (p.grepexclude, p.logalert)
             grepcmd=cmd1 + cmd2

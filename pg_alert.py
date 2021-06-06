@@ -79,7 +79,7 @@
 #                                        we now capture the date of the last alert and make sure we only issue alerts for those that have occurred since the last recorded alert. 
 #                                        This only works for the current session.  It does not carry-over into ensuing sessions.
 #                                        For local log files, we only care if we are working with a new log file, since we have a direct link to the log file in the data directory.
-#
+# 2021-06-06    Michael Vitale    V 3.1  Fixed logic for getting current community postgresql log file name on local directory
 ################################################################################################################
 # v3: exceptions module deprecated, also replace commands with subprocess
 #import string, sys, os, time, datetime, exceptions, socket, commands, argparse, ConfigParser
@@ -396,21 +396,50 @@ class pgmon:
 
     ##########################
     def getlogfilename(self):
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         # parse log_filename to get the right PG log file to open.
-        # self.log_filename
-        # postgresql-%Y-%m%d.log --> postgresql-2016-1230.log
-        # postgresql-%a.log      --> postgresql-Fri.log  postgresql-Thu.log  postgresql-Wed.log
-        # hard-coded expectation of log file at the present time: postgresql-YYYY-MMDD.log
+        # old way is based on log_filename
         dayname=datetime.datetime.now().strftime("%a")
         year = datetime.datetime.now().strftime("%Y")
         month = datetime.datetime.now().strftime("%m")
         day = datetime.datetime.now().strftime("%d")
-        filename = self.log_filename
-        filename = filename.replace("%a", dayname)
-        filename = filename.replace("%Y", year)
-        filename = filename.replace("%m", month)
-        filename = filename.replace("%d", day)
-        return OK, filename        
+        filename1 = self.log_filename
+        filename1 = filename1.replace("%a", dayname)
+        filename1 = filename1.replace("%Y", year)
+        filename1 = filename1.replace("%m", month)
+        filename1 = filename1.replace("%d", day)
+                
+        # new way is based on SQL, which is more stable
+        # 9.6  : SELECT file, (pg_stat_file(current_setting('log_directory')||'/'||file)).modification FROM  pg_ls_dir(current_setting('log_directory')||'/') as list(file) ORDER BY 2 DESC LIMIT 1;
+        # 10.x+:  select pg_current_logfile(); --> log/postgresql-Sun.log, so it's the relative offset from the data_directory.
+        if self.pgversion == 9.6:
+            sql = "SELECT file, (pg_stat_file(current_setting('log_directory')||'/'||file)).modification FROM  pg_ls_dir(current_setting('log_directory')||'/') as list(file) ORDER BY 2 DESC LIMIT 1"
+        else:
+            # assume newer version
+            sql = "select pg_current_logfile()"
+            
+        cur = self.conn.cursor()
+        try:
+            cur.execute(sql)
+        except psycopg2.Error as e:
+            cur.close()
+            self.printit("SQL Error: unable to retrieve PG log file name: %s" % (e))
+            self.cleanup(1)                
+
+        results = cur.fetchall()
+        if not results:
+            cur.close()
+            self.printit("SQL Error: PL log file not found.")
+            self.cleanup(1)                        
+        for avalue in results:
+            filename2 = avalue[0]
+            break
+ 
+        if filename1 != filename2:
+            self.printit("%s: NOTICE: filename1=%s filename2=%s.  Using filename2." % (now, filename1, filename2))
+        elif self.debug:
+            self.printit("%s: DEBUG: filename1=%s filename2=%s.  Using filename2." % (now, filename1, filename2))
+        return OK, filename2        
 
     ##########################
     def testcmd (self, cmd, context):
@@ -521,6 +550,7 @@ class pgmon:
             self.printit("SQL Error: no glucs found.")
             self.cleanup(1)                        
 
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")        
         if self.rds:
             # data_directory, pg log directory are not in play
             for agluc in glucs:
@@ -535,6 +565,8 @@ class pgmon:
                     self.log_filename = agluc[1]                                
         else:    
             for agluc in glucs:
+                if self.debug:
+                    self.printit("%s: DEBUG: aglucs=%s %s" % (now, agluc[0], agluc[1]))
                 if agluc[0] == 'data_directory':
                     self.data_directory = agluc[1]
                 elif agluc[0] == 'log_directory':
@@ -546,7 +578,11 @@ class pgmon:
                 elif agluc[0] == 'log_line_prefix':
                     self.log_line_prefix = agluc[1]
                 elif agluc[0] == 'server_version':
-                    self.pgversion = Decimal(agluc[1])
+                    # check for old version format, x.x.x
+                    if '9.6' in agluc[1]:
+                        self.pgversion = 9.6
+                    else:
+                        self.pgversion = Decimal(agluc[1])
                 elif agluc[0] == 'server_version_num':
                     pass
                     # self.server_version_num = int(agluc[1])                
@@ -719,7 +755,7 @@ class pgmon:
         if self.dbhost == '':                        
             self.dbhost     = config.get("required", "dbhost")
         if self.pgport == '':                        
-            self.pgport     = config.get("optional", "pgport")
+            self.pgport     = config.get("optional", "dbport")
         if self.pgport == "":
             self.pgport = "5432"
 
@@ -905,9 +941,10 @@ class pgmon:
             self.logfile = "%s/%s" % (self.pglog_directory, log_filename)
             if not os.path.exists(self.logfile):
                 self.printit("PG log file does not exist: %s" % self.logfile)            
-            self.cleanup(1)    
-        
-        #print ("%s:  logfile=%s   log_filename=%s" % (now, self.logfile, self.log_filename))
+                self.cleanup(1)    
+
+        if self.debug:        
+            print ("%s: DEBUG logfile=%s   log_filename=%s" % (now, self.logfile, self.log_filename))
         self.logalert     = "%s/alerts-%s.log" % (self.alert_directory,self.filedatefmt)
         self.loghistory   = "%s/alerts-history-%s.log" % (self.alert_directory,self.filedatefmt)
 
@@ -961,6 +998,7 @@ class pgmon:
         key = sep + 'e'
         if self.debug:
             now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            # NOTE: if log_line_prefix looks like this: '< %m >', then the following print will fail since it concats to a file and the redirection in the string breaks it.
             self.printit("%s: DEBUG: before replacement:'%s'" % (now, self.log_line_prefix))
         prefix = self.log_line_prefix.replace("%",sep)
         if self.debug:
@@ -1133,10 +1171,24 @@ class pgmon:
         else:
             self.check_sqlstate  = False            
         
-        self.oldlogfile = self.logfile
-        logfilename  = self.get_rdslog()
-        if logfilename == '':
-            return ERR
+        if self.rds:
+            self.oldlogfile = self.logfile
+            logfilename  = self.get_rdslog()
+            if logfilename == '':
+                return ERR
+        else:
+            # get logfile based on whether we are 9.6 or 10.x+
+            # 9.6  : SELECT file, (pg_stat_file(current_setting('log_directory')||'/'||file)).modification FROM  pg_ls_dir(current_setting('log_directory')||'/') as list(file) ORDER BY 2 DESC LIMIT 1;
+            # 10.x+:  select pg_current_logfile(); --> log/postgresql-Sun.log, so it's the relative offset from the data_directory.
+            self.oldlogfile = self.logfile
+            rc, log_filename = self.getlogfilename()
+            if rc != OK:
+                self.cleanup(1)
+            self.logfile = "%s/%s" % (self.pglog_directory, log_filename)
+            if not os.path.exists(self.logfile):
+                self.printit("PG log file does not exist: %s" % self.logfile)            
+                self.cleanup(1)    
+                return ERR
         
         # now kill the existing grep since a refresh of the log file even if same log file, will invalidate the tail.
         rc = self.terminatetail()        

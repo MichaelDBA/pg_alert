@@ -42,7 +42,8 @@ As of version 3.0, pg_alert now works with AWS RDS and Aurora.
 3. python 3.x.  Python 2.x is not longer supported.
 4. python packages: python-psutil, psycopg2
 5. AWS RDS CLI package version 2.2.5+ is required when working with AWS RDS.
-6. For non-remote clusters, PG Log file format must not extent to time, i.e., hours, minutes, seconds.
+6. PG versions 9.6 and above
+7. For non-remote clusters, PG Log file format must not extent to time, i.e., hours, minutes, seconds.
 log_filename='postgresql-%Y-%m-%d.log'
 <br/>
 log_filename='postgresql-%a.log'

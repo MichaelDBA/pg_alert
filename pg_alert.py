@@ -755,7 +755,7 @@ class pgmon:
         if self.dbhost == '':                        
             self.dbhost     = config.get("required", "dbhost")
         if self.pgport == '':                        
-            self.pgport     = config.get("optional", "dbport")
+            self.pgport     = config.get("required", "dbport")
         if self.pgport == "":
             self.pgport = "5432"
 
@@ -2397,12 +2397,9 @@ p = pgmon()
 
 rc = p.initandvalidate()
 if rc != 0:
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")    
+    p.printit("%s: Initialization Error." % now)
     p.cleanup(1)    
-
-# deprecated call
-# rc = get_lock(p.processname)
-# if rc != 0:
-#     p.cleanup(rc)    
 
 p.showparms()
 

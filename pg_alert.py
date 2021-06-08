@@ -80,6 +80,7 @@
 #                                        This only works for the current session.  It does not carry-over into ensuing sessions.
 #                                        For local log files, we only care if we are working with a new log file, since we have a direct link to the log file in the data directory.
 # 2021-06-06    Michael Vitale    V 3.1  Fixed logic for getting current community postgresql log file name on local directory
+# 2021-06-08    Michael Vitale    V 3.1  Changed grep to not do case-sensitive greps.
 ################################################################################################################
 # v3: exceptions module deprecated, also replace commands with subprocess
 #import string, sys, os, time, datetime, exceptions, socket, commands, argparse, ConfigParser
@@ -2406,7 +2407,11 @@ p.showparms()
 # The timeout value for the grep dictates the duration of this program instance.  
 # we always grep the log file and then tail it.
 #cmd= "timeout %d tail -f %s | grep --line-buffered '%s' > %s 2>&1 &" % (p.seconds, p.logfile, p.grepfilter, p.logalert)
-cmd1= "cat %s | grep --line-buffered '%s' | " % (p.logfile, p.grepfilter)
+
+# V3.1 change: do not use case-sensitive greps
+#cmd1= "cat %s | grep --line-buffered '%s' | " % (p.logfile, p.grepfilter)
+cmd1= "cat %s | grep --line-buffered -i '%s' | " % (p.logfile, p.grepfilter)
+
 cmd2= "grep --line-buffered -v '%s' >> %s 2>&1 &" % (p.grepexclude, p.logalert)
 grepcmd=cmd1 + cmd2
 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")    
@@ -2421,8 +2426,11 @@ if rc != 0:
 
 # Start the tail of the pg log file: file format expected: postgresql-YY-MMDD.log
 #cmd= "timeout %d tail -f %s | grep --line-buffered '%s' > %s 2>&1 &" % (p.seconds, p.logfile, p.grepfilter, p.logalert)
-cmd1= "timeout %d tail -f %s | grep --line-buffered '%s' | " % (p.seconds, p.logfile, p.grepfilter)
-#cmd2= "grep --line-buffered -v '%s' > %s 2>&1 &" % (p.grepexclude, p.logalert)
+
+# V3.1 change: do not use case-sensitive greps
+#cmd1= "timeout %d tail -f %s | grep --line-buffered '%s' | " % (p.seconds, p.logfile, p.grepfilter)
+cmd1= "timeout %d tail -f %s | grep --line-buffered -i '%s' | " % (p.seconds, p.logfile, p.grepfilter)
+
 cmd2= "grep --line-buffered -v '%s' >> %s 2>&1 &" % (p.grepexclude, p.logalert)
 grepcmd=cmd1 + cmd2
 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")    
@@ -2583,3 +2591,4 @@ while True:
 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")    
 p.printit("%s: Daily Monitoring ending. %d alert(s) detected." % (now, p.alertcnt))
 p.cleanup(0)
+

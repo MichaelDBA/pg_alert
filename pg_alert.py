@@ -81,6 +81,7 @@
 #                                        For local log files, we only care if we are working with a new log file, since we have a direct link to the log file in the data directory.
 # 2021-06-06    Michael Vitale    V 3.1  Fixed logic for getting current community postgresql log file name on local directory
 # 2021-06-08    Michael Vitale    V 3.1  Changed grep to not do case-sensitive greps.
+#                                        Changed alert logic to buffer alerts before sending them out instead of alerting individually. 
 ################################################################################################################
 # v3: exceptions module deprecated, also replace commands with subprocess
 #import string, sys, os, time, datetime, exceptions, socket, commands, argparse, ConfigParser
@@ -921,6 +922,10 @@ class pgmon:
         if self.from_ == "":
             self.from_ = "PostgreSQL Administrator <%s@%s>" % (self.dbuser, self.dbhost)
 
+        rc = self.get_pidlock()
+        if rc != OK:
+            self.cleanup(rc)                
+
         # get pg log file        
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         if self.rds:
@@ -949,10 +954,6 @@ class pgmon:
         self.logalert     = "%s/alerts-%s.log" % (self.alert_directory,self.filedatefmt)
         self.loghistory   = "%s/alerts-history-%s.log" % (self.alert_directory,self.filedatefmt)
 
-        rc = self.get_pidlock()
-        if rc != OK:
-            self.cleanup(rc)                
-            
         # remove alert file if exists and clear out history file as well
         cmd = "echo '' > %s" % (self.logalert)
         rc,out,errs = self.executecmd(cmd,False)
@@ -1166,11 +1167,12 @@ class pgmon:
                     #self.cleanup(1)                
                     pass
            
-        if (len(self.sqlstates) != 0 or len(self.sqlclasses) != 0) and (self.sqlstateprefix != '' and self.sqlstatepostfix != ''):
+        if (len(self.sqlstates) != 0 or len(self.sqlclasses) != 0) and (self.sqlstateprefix != '' and self.sqlstatepostfix != ''  and self.sqlstate != ''):
             # must be valid sqlstate checking
-            self.check_sqlstate  = True                
+            print ("Setting check sqlstate = TRUE")
+            self.check_sqlstate  = True                        
         else:
-            self.check_sqlstate  = False            
+            self.check_sqlstate  = False                    
         
         if self.rds:
             self.oldlogfile = self.logfile
@@ -1211,12 +1213,20 @@ class pgmon:
             return OK
         print (message)
         #cmd = 'echo "%s" >> %s' % (message, self.loghistory)
+        
+        # V3.1 fix: escape single ticks and backslashes
+        #print ("msg0=%s"  % message)
+        msg = message.replace("\\","\\\\")
+        #print ("msg1=%s"  % msg)
+        msg = message.replace("'","\'")
+        #print ("msg2=%s"  % msg)
+        
         cmd = 'echo \'%s\' >> %s' % (message, self.loghistory)
-        # print 'cmd -->%s' % cmd
+        #print ('AAAAAAAAA  cmd -->%s' % cmd)
         #rc = subprocess.call(cmd, shell=True)  
         rc = subprocess.call(cmd, shell=True, executable='/bin/bash')  
         if rc != 0:
-            msg = "Unable to print previous message. subprocess.call error return code = %d" % (rc)
+            msg = "Unable to print previous message. subprocess.call error return code = %d command=%s" % (rc, cmd)
             print (msg)
             # sysmsg = "cat %s > %s\n" % (msg,self.loghistory)
             # os.system(sysmgs)
@@ -1386,11 +1396,12 @@ class pgmon:
     ########################
     def sendalert(self,msg):
 
-        # decode for utf-8
-        msg = msg.strip()        
         if self.debug:
             now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             self.printit("%s: DEBUG: sendalert msg=%s" % (now,msg))
+
+        # decode for utf-8
+        msg = msg.strip()                
         
         if not self.sendemail:
             return OK
@@ -1837,12 +1848,12 @@ class pgmon:
         if self.lastalert == '':
             self.lastalert = value
         else:
-            if value > self.lastalert:
+            if value >= self.lastalert:
                 self.lastalert = value
             else:
                 if self.debug:
                     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    self.printit ("%s: DEBUG: bypassing old alert, %s" % (now,msg))
+                    self.printit ("%s: DEBUG: bypassing old alert. old=%s new=%s.  %s" % (now,self.lastalert, value, msg))
                 return False
 
         # check for obvious things like deadlocks
@@ -2452,6 +2463,8 @@ timeout = time.time() + p.seconds + 2
 
 tailfinished = 0
 bAbort = False
+buffered_alerts = ''
+buffered_alerts_cnt = 0
 while True:
     if time.time() > timeout:
         break
@@ -2549,6 +2562,17 @@ while True:
         line = p.alert.readline()
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")    
         if not line:
+            # v3.1: see if we have any buffered_alerts to send out
+            if buffered_alerts != '':
+                if p.verbose:
+                    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")    
+                    p.printit("%s: VERBOSE: sending %d buffered alerts(A)." % (now, buffered_alerts_cnt))            
+                rc = p.sendalert(buffered_alerts)
+                if rc != 0:
+                    p.cleanup(1)    
+                buffered_alerts = ''
+                buffered_alerts_cnt = 0
+        
             if tailfinished:
                 break;
             else:    
@@ -2577,16 +2601,27 @@ while True:
                     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     p.printit("%s: DEBUG: evaluating msg: %s" % (now, line.strip()))
                 if p.alertvalidated(line.strip()):
-                    buffcnt = buffcnt + 1    
-                    rc = p.sendalert(line.strip())
-                    if rc != 0:
-                        p.cleanup(1)    
+                    # no need to keep track of sending out too many alerts since we buffer them now
+                    #buffcnt = buffcnt + 1    
+                    
+                    # v3.1: buffer the alerts
+                    buffered_alerts = buffered_alerts + line.strip() + '\n'
+                    buffered_alerts_cnt = buffered_alerts_cnt + 1
+                    if p.debug:
+                        p.printit("%s: %d buffered alert=%s" % (now, buffered_alerts_cnt, line.strip()))
+                    #rc = p.sendalert(line.strip())
+                    #if rc != 0:
+                    #    p.cleanup(1)    
                 else:
                     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                    
-                    if p.bypass:
-                        if p.verbose:
-                            p.printit("%s: VERBOSE: bypass(2) for %s\n" % (now,line.strip()))
-                    # pass
+                    if p.debug:
+                        p.printit("%s: DEBUG: bypass(2) bypass=%r  for %s\n" % (now, p.bypass, line.strip()))
+
+if buffered_alerts != '':
+    if p.verbose:
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")    
+        p.printit("%s: VERBOSE: sending %d buffered alerts(B)." % (now, buffered_alerts_cnt))
+    rc = p.sendalert(buffered_alerts)
                 
 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")    
 p.printit("%s: Daily Monitoring ending. %d alert(s) detected." % (now, p.alertcnt))

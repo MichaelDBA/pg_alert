@@ -46,7 +46,6 @@ As of version 3.0, pg_alert now works with AWS RDS and Aurora.
 7. For non-remote clusters, PG Log file format must not extent to time, i.e., hours, minutes, seconds.
 log_filename='postgresql-%Y-%m-%d.log'
 <br/>
-log_filename='postgresql-%a.log'
 
 ## Inputs
 All input fields are taken from the associated configuration file, pg_alert.conf.  You can override some parameters on the command line.  The only required parameter is the location of the configuration file.

@@ -2,7 +2,7 @@
 This python program monitors the PostgreSQL log file and sends email alerts based on user-set configuration parameters.  You can get it here:
 `git clone https://github.com/MichaelDBA/pg_alert.git pg_alert`
 
-(c) 2012-2021 SQLEXEC LLC
+(c) 2012-2026 SQLEXEC LLC
 <br/>
 GNU V3 and MIT licenses are conveyed accordingly.
 <br/>
@@ -42,7 +42,7 @@ As of version 3.0, pg_alert now works with AWS RDS and Aurora.
 3. python 3.x.  Python 2.x is not longer supported.
 4. python packages: python-psutil, psycopg2
 5. AWS RDS CLI package version 2.2.5+ is required when working with AWS RDS.
-6. PG versions 9.6 and above
+6. PG versions 10 and above
 7. For non-remote clusters, PG Log file format must not extent to time, i.e., hours, minutes, seconds.
 log_filename='postgresql-%Y-%m-%d.log'
 <br/>

@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-#!/usr/bin/env python
 ###############################################################################
 ### COPYRIGHT NOTICE FOLLOWS.  DO NOT REMOVE
 ###############################################################################
-### Copyright (c) 2012 - 2021, SQLEXEC LLC
+### Copyright (c) 2012 - 2026, SQLEXEC LLC
 ###
 ### This program is bound by the following licenses:
 ###    GNU GENERAL PUBLIC LICENSE Version 3, 29 June 2007
@@ -26,7 +25,7 @@
 ### ENHANCEMENTS, OR MODIFICATIONS.
 ###
 #######################################G########################################
-# Original Author: Michael Vitale, michael@sqlexec.com
+# Original Author: Michael Vitale, michaeldba@sqlexec.com
 #
 # Description: pg_alert.py is a PG monitoring script that sends email alerts based on 
 #              monitored elements in a log file, host metrics, or db queries.
@@ -82,23 +81,18 @@
 # 2021-06-06    Michael Vitale    V 3.1  Fixed logic for getting current community postgresql log file name on local directory
 # 2021-06-08    Michael Vitale    V 3.1  Changed grep to not do case-sensitive greps.
 #                                        Changed alert logic to buffer alerts before sending them out instead of alerting individually. 
+# 2026-11-11    Michael Vitale    V 4.0  Issue#01: Cleaning up a bunch of stuff since the last changes in 2021.
+
 ################################################################################################################
-# v3: exceptions module deprecated, also replace commands with subprocess
-#import string, sys, os, time, datetime, exceptions, socket, commands, argparse, ConfigParser
 import string, sys, os, time, datetime, socket, argparse, configparser
-import random, math, signal, platform, glob, stat, imp
+import random, math, signal, platform, glob, stat
 import smtplib, subprocess
 from subprocess import *
 from decimal import *
 from optparse import OptionParser
-
-# fix for v3:
-#from email.MIMEMultipart import MIMEMultipart
+import traceback
 from email.mime.multipart import MIMEMultipart
-
-# fix for v3:
-#from email.MIMEText import MIMEText
-from email.mime.multipart import MIMEMultipart
+from email.mime.text      import MIMEText
 
 # psycopg2 and psutil imported directly in function where needed since we test for it using imp to avoid exception 
 
@@ -127,6 +121,7 @@ def get_lock(processname):
         return NOPROGLOCK
     return OK
 
+
 ########################
 def which(program):
     def is_exe(fpath):
@@ -145,9 +140,10 @@ def which(program):
     return ''
 
 
+########################
 class pgmon:
     def __init__(self):
-        self.version       = "pg_alert (V 2.5   Aug. 29, 2018)"
+        self.version       = "pg_alert (V4.0   Nov. 11, 2026)"
         self.system         = platform.system()
         self.python_version = platform.python_version()
         self.description   = "%s is a PostgreSQL alerting tool" % self.version
@@ -168,7 +164,12 @@ class pgmon:
         self.configfile    = ""
         self.logalert      = ""
         self.loghistory    = ""
+
         self.pidfile       = ""
+        self.pidfile_owned = False
+        self.tail_started  = False
+        self.cleanup_started = False
+        
         self.sendemail     = False
         self.ignore_autovacdaemon = True
         self.ignore_uservac = True
@@ -219,10 +220,9 @@ class pgmon:
         self.lockwait        = 1
         self.tempbytesthreshold = 999999999999
         self.pgversion       = Decimal('0.0')
-        # logfile=/home/centos/tools/postgresql.log.2021-05-28-1900   
+
         self.logfile       = ""
         self.oldlogfile    = ""
-        # log_filename=postgresql.log.%Y-%m-%d-%H%M        
         self.log_filename    = ''
         
         self.slaves          = ''
@@ -276,7 +276,7 @@ class pgmon:
         cmd = "%s/get_awslogs_cli_partsX.sh 100 NA %s %s %s" % (self.alert_directory, self.dbid, self.alert_directory, logfilename2)
         rc,out,errs = self.executecmd(cmd,True)  
         if rc != 0:
-            self.printit('Unable to get complete rds log file. rc=%d  errs=$s' % (rc,errs))
+            self.printit('Unable to get complete rds log file. rc=%d  errs=%s' % (rc,errs))
             return ERR
         return OK    
 
@@ -306,14 +306,14 @@ class pgmon:
                 continue
             epoch = out.rstrip("\n")
             now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            self.printit ("%s: Using epoch=%s to get the latest RDS log." % (now,epoch))
+            self.printit ("%s INFO:  Using epoch=%s to get the latest RDS log." % (now,epoch))
         
             # get the name of the most recent log file
             #cmd = "aws rds describe-db-log-files --db-instance-identifier %s --file-size 1 --file-last-written %s" % (self.dbid, out)
             cmd = "aws rds describe-db-log-files --db-instance-identifier %s --file-size 1 --file-last-written %s | grep -i logfilename | cut -f2 -d: |  tr -d ',' | tr -d '\\\"'"   % (self.dbid, epoch)
             if self.debug:
                 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                print ("%s: DEBUG: cmd=%s" % (now,cmd))
+                print ("%s DEBUG:  cmd=%s" % (now,cmd))
             rc,out,errs = self.executecmd(cmd,True)  
             if rc != 0:
                 lasterr = 'Unable to get name of most recent rds log file. rc=%d  errors=%s' % (rc, errs)
@@ -323,7 +323,7 @@ class pgmon:
             logfilename = out.strip()
             if logfilename == '':
                 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                lasterr = "%s: Unable to get log file name for --file-last-written using epoch, %s.  cmd=%s" % (now,epoch, cmd)
+                lasterr = "%s Unable to get log file name for --file-last-written using epoch, %s.  cmd=%s" % (now,epoch, cmd)
                 if i < 3:
                     lasterr = lasterr + ' Retrying...'
                 self.printit(lasterr)
@@ -340,7 +340,7 @@ class pgmon:
         logfilename2 = logfilename.replace('error/','')
 
         # get the log.  This is complicated since at the current time, AWS RDS CLI only returns 2MB per call.  So we have to loop
-        self.printit ("%s: Downloading log file parts for log, %s" % (now,logfilename2))
+        self.printit ("%s Downloading log file parts for log, %s" % (now,logfilename2))
         rc = self.get_rdslogcomplete(logfilename, logfilename2)
         if rc != 0:
             return rc
@@ -349,7 +349,7 @@ class pgmon:
         cmd = "aws rds describe-db-log-files --db-instance-identifier %s --file-size 1 --filename-contains %s | grep -i size | cut -f2 -d: |  tr -d ',' | tr -d '\\\"'" % (self.dbid, logfilename2)
         if self.debug:
             now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            print ("%s: DEBUG: cmd=%s" % (now,cmd))
+            print ("%s DEBUG:  cmd=%s" % (now,cmd))
         rc,expectedsize,errs = self.executecmd(cmd,True)  
         if rc != 0:
             self.printit('Unable to get described size of PG log file, %s. rc=%d  errors=%s' % (logfilename2, rc, errs))
@@ -362,10 +362,11 @@ class pgmon:
         
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                    
         if self.oldlogfile == self.logfile:
-            self.printit ("%s: Using same log file. logfile=%s  expected size=%s  actual size=%d" % (now, self.logfile, expectedsize, actualsize))
+            self.printit ("%s Using same log file. logfile=%s  expected size=%s  actual size=%d" % (now, self.logfile, expectedsize, actualsize))
         else:
-            self.printit ("%s: Using new log file. logfile=%s  expected size=%s  actual size=%d" % (now, self.logfile, expectedsize, actualsize))
+            self.printit ("%s Using new log file. logfile=%s  expected size=%s  actual size=%d" % (now, self.logfile, expectedsize, actualsize))
         return logfilename2
+
 
     ########################
     def get_pidlock(self):
@@ -373,16 +374,19 @@ class pgmon:
         self.pidfile = "/tmp/%s.pid" % self.processname
 
         if os.path.isfile(self.pidfile):
-            self.printit('Pid file exists (%s).  Program is already running. Exiting...' % (self.pidfile))            
+            self.printit('Pid file exists (%s). Program is already running. Exiting...' % self.pidfile)
             return NOPROGLOCK
-        
+
         try:
-            afile = open(self.pidfile, 'w')
-            afile.write(pid)
+            with open(self.pidfile, 'w') as afile:
+                afile.write(pid)
+            self.pidfile_owned = True
         except Exception as e:
-            self.printit('Unable to obtain pid lock (%s)' % (e))            
+            self.printit('Unable to obtain pid lock (%s)' % e)
             return NOPROGLOCK
+
         return OK
+
 
     ##########################
     def setupOptionParser(self):
@@ -411,36 +415,28 @@ class pgmon:
         filename1 = filename1.replace("%m", month)
         filename1 = filename1.replace("%d", day)
                 
-        # new way is based on SQL, which is more stable
-        # 9.6  : SELECT file, (pg_stat_file(current_setting('log_directory')||'/'||file)).modification FROM  pg_ls_dir(current_setting('log_directory')||'/') as list(file) ORDER BY 2 DESC LIMIT 1;
-        # 10.x+:  select pg_current_logfile(); --> log/postgresql-Sun.log, so it's the relative offset from the data_directory.
-        if self.pgversion == 9.6:
-            sql = "SELECT file, (pg_stat_file(current_setting('log_directory')||'/'||file)).modification FROM  pg_ls_dir(current_setting('log_directory')||'/') as list(file) ORDER BY 2 DESC LIMIT 1"
-        else:
-            # assume newer version
-            sql = "select pg_current_logfile()"
-            
+        # get absolute path to to log file
+        sql = "SELECT current_setting('data_directory') || '/' || pg_current_logfile() AS current_log_file"
+
         cur = self.conn.cursor()
         try:
             cur.execute(sql)
         except psycopg2.Error as e:
             cur.close()
-            self.printit("SQL Error: unable to retrieve PG log file name: %s" % (e))
+            now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self.printit("%s ERROR: SQL Error: unable to retrieve PG log file name: %s" % (now,e))
             self.cleanup(1)                
 
-        results = cur.fetchall()
-        if not results:
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        arow = cur.fetchone()[0]        
+        if len(arow) == 0:
             cur.close()
-            self.printit("SQL Error: PL log file not found.")
+            self.printit("%s ERROR: SQL Error: PG log file not found." % now)
             self.cleanup(1)                        
-        for avalue in results:
-            filename2 = avalue[0]
-            break
- 
-        if filename1 != filename2:
-            self.printit("%s: NOTICE: filename1=%s filename2=%s.  Using filename2." % (now, filename1, filename2))
-        elif self.debug:
-            self.printit("%s: DEBUG: filename1=%s filename2=%s.  Using filename2." % (now, filename1, filename2))
+        filename2 = arow
+
+        self.printit("%s INFO:   Using logfile, %s" % (now, filename2))
+            
         return OK, filename2        
 
     ##########################
@@ -465,7 +461,7 @@ class pgmon:
         if self.keeplogdays > -1:
             # delete all old logs
             if self.verbose:
-                self.printit("%s: Pruning old pg_alert log files...\n" % (now))
+                self.printit("%s INFO:   Pruning old pg_alert log files...\n" % (now))
             for filename in os.listdir(self.alert_directory):
                 curr_file = os.path.join(self.alert_directory, filename)
                 file_modified = datetime.datetime.fromtimestamp(os.path.getmtime(curr_file))
@@ -488,7 +484,7 @@ class pgmon:
                     pass
         else:
             # do nothing for now, add logic later for specifying exactness of logs to prune
-            self.printit("%s: No log file pruning specified.\n" % (now))
+            self.printit("%s No log file pruning specified.\n" % (now))
     
         return OK
 
@@ -500,33 +496,22 @@ class pgmon:
             return ERR
             
         try:
-            imp.find_module('psycopg2')
-            found = True
             global psycopg2
             import psycopg2
-
         except ImportError:
-            found = False        
-        if not found:
             self.printit("psycopg2 package is required.")
             return ERR
-        
+
         try:
-            imp.find_module('psutil')
-            found = True
             global psutil
-            import psutil            
+            import psutil
         except ImportError:
-            found = False        
-        if not found:
             self.printit("python-psutil package is required.")
             return ERR
         
-        # we only support python 2.7 flavors      
-        # fix for v3: replace <> with != and require python 3.6
-        #if self.python_version[0:3] <> '2.7':
-        if self.python_version[0:3] != '3.6':
-            self.printit("Unsupported python version, %s.  Only 3.6.x and above are supported at the present time.  Some important functionality may not work correctly." % (self.python_version))
+        # we only support python 3.x flavors      
+        if not self.python_version.startswith('3.'):
+            self.printit("Unsupported python version, %s.  Only 3.x and above are supported at the present time.  Some important functionality may not work correctly." % (self.python_version))
             # return ERR
             return OK
         return OK    
@@ -543,57 +528,50 @@ class pgmon:
         #except psycopg2.Error, e:
         except psycopg2.Error as e:
             cur.close()
-            self.printit("SQL Error: unable to retrieve PG Glucs: %s" % (e))
+            self.printit("SQL Error: unable to retrieve PG GUCs: %s" % (e))
             self.cleanup(1)                
 
-        glucs = cur.fetchall()
-        if not glucs:
+        gucs = cur.fetchall()
+        if not gucs:
             cur.close()
-            self.printit("SQL Error: no glucs found.")
+            self.printit("SQL Error: no GUCs found.")
             self.cleanup(1)                        
 
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")        
         if self.rds:
             # data_directory, pg log directory are not in play
-            for agluc in glucs:
-                if agluc[0] == 'log_line_prefix':
-                    self.log_line_prefix = agluc[1]
-                elif agluc[0] == 'server_version':
-                    self.pgversion = Decimal(agluc[1])
-                elif agluc[0] == 'server_version_num':
+            for aguc in gucs:
+                if aguc[0] == 'log_line_prefix':
+                    self.log_line_prefix = aguc[1]
+                elif aguc[0] == 'server_version':
+                    self.pgversion = int(aguc[1].split('.')[0])                    
+                elif aguc[0] == 'server_version_num':
                     pass
-                    # self.server_version_num = int(agluc[1])                
-                elif agluc[0] == 'log_filename':
-                    self.log_filename = agluc[1]                                
+                elif aguc[0] == 'log_filename':
+                    self.log_filename = aguc[1]                                
         else:    
-            for agluc in glucs:
+            for aguc in gucs:
                 if self.debug:
-                    self.printit("%s: DEBUG: aglucs=%s %s" % (now, agluc[0], agluc[1]))
-                if agluc[0] == 'data_directory':
-                    self.data_directory = agluc[1]
-                elif agluc[0] == 'log_directory':
+                    self.printit("%s DEBUG:  GUCs=%s %s" % (now, aguc[0], aguc[1]))
+                if aguc[0] == 'data_directory':
+                    self.data_directory = aguc[1]
+                elif aguc[0] == 'log_directory':
                     if self.pglog_directory == '':
-                        self.pglog_directory = agluc[1]
+                        self.pglog_directory = aguc[1]
                         if self.pglog_directory == 'pg_log' or self.pglog_directory == 'log':
                             # need to preappend data dir
                             self.pglog_directory = self.data_directory + '/' + self.pglog_directory
-                elif agluc[0] == 'log_line_prefix':
-                    self.log_line_prefix = agluc[1]
-                elif agluc[0] == 'server_version':
-                    # check for old version format, x.x.x
-                    if '9.6' in agluc[1]:
-                        self.pgversion = 9.6
-                    else:
-                        self.pgversion = Decimal(agluc[1])
-                elif agluc[0] == 'server_version_num':
+                elif aguc[0] == 'log_line_prefix':
+                    self.log_line_prefix = aguc[1]
+                elif aguc[0] == 'server_version':
+                    self.pgversion = int(aguc[1].split('.')[0])                        
+                elif aguc[0] == 'server_version_num':
                     pass
-                    # self.server_version_num = int(agluc[1])                
-                    # print 'DEBUG: server version number: %d' % self.server_version_num
-                elif agluc[0] == 'log_filename':
-                    self.log_filename = agluc[1]                                
+                elif aguc[0] == 'log_filename':
+                    self.log_filename = aguc[1]
                 else:
                     cur.close
-                    self.printit("Program Error: Unexpected gluc: %s" % agluc[0])
+                    self.printit("Program Error: Unexpected GUC: %s" % aguc[0])
                     self.cleanup(1)        
                 
         self.pg_tmp = self.data_directory + '/base/pgsql_tmp'
@@ -602,6 +580,10 @@ class pgmon:
 
     ##########################
     def initandvalidate(self):
+
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                    
+        msg = "%s INFO:   %s" % (now,self.version)
+        self.printit (msg)
 
         rc = self.checksystem()
         # fix for v3: replace <> with !=
@@ -634,7 +616,7 @@ class pgmon:
         if self.options.dbhost != "":
             self.dbhost     = self.options.dbhost
                 
-        config = configparser.SafeConfigParser({'sqlstate':'', 'sqlclass':'', 'lockwait':'', 'checkinterval':'', \
+        config = configparser.ConfigParser({'sqlstate':'', 'sqlclass':'', 'lockwait':'', 'checkinterval':'', \
                  'loadthreshold':'', 'dirthreshold':'', 'idletransthreshold':'', 'querytransthreshold':'', 'pgsql_tmp_threshold':'', 'lockfilter':'', \
                  'pglog_directory':'', 'alert_directory':'', 'ignore_autovacdaemon':'True', 'ignore_uservac':'True', 'tempbytesthreshold':'', 'slaves':'', \
                  'monitorlag':'False', 'alert_stmt_timeout':'False', 'ignoreapps':'', 'ignoreusers':'','ignorequeries':'', 'suspended':'False', \
@@ -730,7 +712,7 @@ class pgmon:
 
             if self.debug:
                 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                self.printit("%s: DEBUG: Using this location for mailx: %s" % (now, self.mailbin))
+                self.printit("%s DEBUG:  Using this location for mailx: %s" % (now, self.mailbin))
 
         # we only override verbose and debug if true is passed via command line
         if not self.verbose:
@@ -774,15 +756,19 @@ class pgmon:
             
             # v2.1 enhancement: do not abort if we cannot connect, just disable db checking stuff
             # v2.3 on second thought, abort if we cannot connect.
-            #self.printit("%s: NOTICE. DB session checks are disabled for this instance of pg_alert." % now)
-            self.printit("%s: NOTICE. Unable to connect to database. Exiting...." % now)
+            #self.printit("%s NOTICE. DB session checks are disabled for this instance of pg_alert." % now)
+            self.printit("%s NOTICE. Unable to connect to database. Exiting...." % now)
             self.connected = False
             self.cleanup(1)          
 
-        if  self.connected:
+        if self.connected:
             rc = self.getdbinfo()
             if rc != OK:
                 self.cleanup(1)
+            if self.pgversion < 10:
+                self.printit("ERROR: Unsupported PostgreSQL version %d. pg_alert requires PostgreSQL 10 or later." % self.pgversion)
+                self.cleanup(1)                
+                
         interim = config.get("required", "minutes")
         if interim == "":
             self.minutes = 0
@@ -935,41 +921,40 @@ class pgmon:
             if rc != 0:
                 self.cleanup(rc)
                 
-            self.printit ("%s: aws rds cli interface is available: %s" % (now,out))
+            self.printit ("%s INFO:   aws rds cli interface is available: %s" % (now,out))
             logfilename  = self.get_rdslog()
             if logfilename == '':
                 self.cleanup(rc)            
         else:
             # parse log_filename to get the right PG log file to open.        
-            rc, log_filename = self.getlogfilename()
+            rc, self.logfile = self.getlogfilename()
             if rc != OK:
                 self.cleanup(1)
-            self.logfile = "%s/%s" % (self.pglog_directory, log_filename)
             if not os.path.exists(self.logfile):
                 self.printit("PG log file does not exist: %s" % self.logfile)            
                 self.cleanup(1)    
 
         if self.debug:        
-            print ("%s: DEBUG logfile=%s   log_filename=%s" % (now, self.logfile, self.log_filename))
+            print ("%s DEBUG:  logfile=%s   log_filename=%s" % (now, self.logfile, self.log_filename))
         self.logalert     = "%s/alerts-%s.log" % (self.alert_directory,self.filedatefmt)
         self.loghistory   = "%s/alerts-history-%s.log" % (self.alert_directory,self.filedatefmt)
 
-        # remove alert file if exists and clear out history file as well
-        cmd = "echo '' > %s" % (self.logalert)
-        rc,out,errs = self.executecmd(cmd,False)
-        if rc != 0:
-            self.cleanup(1)                
+        # Create alert file if it does not exist. Never truncate existing logs.
+        try:
+            with open(self.logalert, 'a'):
+                pass
+        except OSError as e:
+            self.printit("Unable to create alert file(%s). %s" % (self.logalert, e))
+            self.cleanup(1)
 
-        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                    
-        msg = "%s: %s" % (now,self.version)
-        # fix for v3
-        #print msg
-        self.printit (msg)
-        cmd = "echo '%s' > %s" % (msg, self.loghistory)
-        rc,out,errs = self.executecmd(cmd,False)  
-        if rc != 0:
-            self.cleanup(1)                
-
+        # Append startup message to history log.
+        try:
+            with open(self.loghistory, 'a') as logfile:
+                logfile.write(msg + '\n')
+        except OSError as e:
+            self.printit("Unable to write to history file(%s). %s" % (self.loghistory, e))
+            self.cleanup(1)
+            
         try:
             self.alert = open(self.logalert, 'r')
         except IOError as e:
@@ -979,6 +964,9 @@ class pgmon:
         except: 
            self.printit("Unable to open alert file(%s). Unexpected error:", (self.logalert, sys.exc_info()[0]))
            self.cleanup(1)                
+        
+        # Position reader at EOF so existing alerts are not reprocessed.
+        self.alert.seek(0, os.SEEK_END)
         
         # convert minutes to seconds        
         self.seconds = self.minutes * 60
@@ -1001,18 +989,16 @@ class pgmon:
         if self.debug:
             now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             # NOTE: if log_line_prefix looks like this: '< %m >', then the following print will fail since it concats to a file and the redirection in the string breaks it.
-            self.printit("%s: DEBUG: before replacement:'%s'" % (now, self.log_line_prefix))
+            self.printit("%s DEBUG:  before replacement:'%s'" % (now, self.log_line_prefix))
         prefix = self.log_line_prefix.replace("%",sep)
         if self.debug:
             now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            self.printit("%s: DEBUG: after  replacement:'%s'" % (now, prefix))
+            self.printit("%s DEBUG:  after  replacement:'%s'" % (now, prefix))
         index = prefix.find(key)
         if index > -1:
             index = prefix.find(key)
             after = prefix[index+4:]
-            # self.printit("DEBUG: after  ='%s'" % after)
             before = prefix[0:index]
-            # self.printit("DEBUG: before ='%s'" % before)
             index = before.rfind(sep)
             before = before[index+seplen+1:]
             index = after.find(sep)
@@ -1023,8 +1009,8 @@ class pgmon:
             self.sqlstatepostfix = after
             if self.debug:
                 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                self.printit("%s: DEBUG: prefix  ='%s'" % (now, self.sqlstateprefix))
-                self.printit("%s: DEBUG: postfix ='%s'" % (now, self.sqlstatepostfix))
+                self.printit("%s DEBUG:  prefix  ='%s'" % (now, self.sqlstateprefix))
+                self.printit("%s DEBUG:  postfix ='%s'" % (now, self.sqlstatepostfix))
 
         if (len(self.sqlstates) != 0 or len(self.sqlclasses) != 0) and (self.sqlstateprefix != '' and self.sqlstatepostfix != ''  and self.sqlstate != ''):
             # must be valid sqlstate checking
@@ -1052,10 +1038,10 @@ class pgmon:
         # We never refresh db connection parameters.  Connections last for the duration of the program.
         
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self.printit("%s: Refreshing log and configuration values..." % now)
+        self.printit("%s INFO:   Refreshing log and configuration values..." % now)
             
         # re-initiate reading of config file
-        config = configparser.SafeConfigParser({'sqlstate':'', 'sqlclass':'', 'lockwait':'', 'checkinterval':'', \
+        config = configparser.ConfigParser({'sqlstate':'', 'sqlclass':'', 'lockwait':'', 'checkinterval':'', \
                  'loadthreshold':'', 'dirthreshold':'', 'idletransthreshold':'', 'querytransthreshold':'', 'pgsql_tmp_threshold':'', 'lockfilter':'', \
                  'pglog_directory':'', 'alert_directory':'', 'ignore_autovacdaemon':'True', 'ignore_uservac':'True', 'tempbytesthreshold':'', 'slaves':'', \
                  'monitorlag':'False', 'alert_stmt_timeout':'False', 'ignoreapps':'', 'ignoreusers':'','ignorequeries':'', 'suspended':'False', \
@@ -1180,112 +1166,157 @@ class pgmon:
             if logfilename == '':
                 return ERR
         else:
-            # get logfile based on whether we are 9.6 or 10.x+
-            # 9.6  : SELECT file, (pg_stat_file(current_setting('log_directory')||'/'||file)).modification FROM  pg_ls_dir(current_setting('log_directory')||'/') as list(file) ORDER BY 2 DESC LIMIT 1;
-            # 10.x+:  select pg_current_logfile(); --> log/postgresql-Sun.log, so it's the relative offset from the data_directory.
+            now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S") 
             self.oldlogfile = self.logfile
-            rc, log_filename = self.getlogfilename()
+            rc, self.logfile = self.getlogfilename()
             if rc != OK:
                 self.cleanup(1)
-            self.logfile = "%s/%s" % (self.pglog_directory, log_filename)
             if not os.path.exists(self.logfile):
-                self.printit("PG log file does not exist: %s" % self.logfile)            
+                self.printit("%s WARN:  PG log file does not exist: %s" % (now, self.logfile))
                 self.cleanup(1)    
                 return ERR
         
-        # now kill the existing grep since a refresh of the log file even if same log file, will invalidate the tail.
-        rc = self.terminatetail()        
-        if rc != 0:
-            self.printit('Unable to terminate tail for refreshing. rc=%d' % (rc))
-            return ERR        
-        if self.debug:
-            now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                                
-            print ("%s: DEBUG: Killed existing tail." % now)            
-        
+        # only kill the existing tail if the log file has changed or we are using RDS.
+        if self.rds or self.oldlogfile != self.logfile:
+            rc = self.terminatetail()
+            if rc == ERR:
+                self.printit('%s ERROR: Unable to terminate tail for refreshing. rc=%d' % (now,rc))
+                return ERR
+
+            now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            print ("%s INFO:   Killed existing tail." % now)        
         self.showparms();
         
         return OK
 
+
+    ########################
+    def get_last_alert_timestamp(self):
+        last_timestamp = ''
+
+        try:
+            with open(self.logalert, 'rb') as logfile:
+                for line in logfile:
+                    value = line[:23].decode('ascii', 'ignore')
+                    x = value[:19].replace("-", "").replace(":", "").replace(" ", "")
+                    if len(value) == 23 and x.isdigit() and value[19] == '.' and value[20:23].isdigit():
+                        last_timestamp = value
+
+            if self.debug:
+                now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                self.printit("%s DEBUG:  last alert timestamp=%s" % (now, last_timestamp))
+
+            return OK, last_timestamp
+
+        except OSError as e:
+            now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self.printit("%s ERROR: Unable to read alert log (%s). %s" % (now, self.logalert, e))
+            return ERR, ''
+
+
+    ########################
+    def find_log_resume_position(self, timestamp):
+        if timestamp == '':
+            return OK, 0, False
+
+        try:
+            with open(self.logfile, 'rb') as pglog:
+                while True:
+                    line = pglog.readline()
+                    if not line:
+                        break
+
+                    value = line[:23].decode('ascii', 'ignore')
+                    if value == timestamp:
+                        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        if self.debug:
+                            self.printit("%s DEBUG:  found timestamp=%s at byte position=%d" % (now, timestamp, pglog.tell()))
+                        return OK, pglog.tell(), True
+
+            if self.debug:
+                now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                self.printit("%s DEBUG:  did not find log resume position" % now)
+            
+            return OK, 0, False
+
+        except OSError as e:
+            now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self.printit("%s ERROR: Unable to search PostgreSQL log (%s). %s" % (now, self.logfile, e))
+            return ERR, 0, False
+            
+
     ########################
     def printit(self,message):
         if self.loghistory == '':
-            print (message)
+            print(message)
             return OK
-        print (message)
-        #cmd = 'echo "%s" >> %s' % (message, self.loghistory)
-        
-        # V3.1 fix: escape single ticks and backslashes
-        #print ("msg0=%s"  % message)
-        msg = message.replace("\\","\\\\")
-        #print ("msg1=%s"  % msg)
-        msg = message.replace("'","\'")
-        #print ("msg2=%s"  % msg)
-        
-        cmd = 'echo \'%s\' >> %s' % (message, self.loghistory)
-        #print ('AAAAAAAAA  cmd -->%s' % cmd)
-        #rc = subprocess.call(cmd, shell=True)  
-        rc = subprocess.call(cmd, shell=True, executable='/bin/bash')  
-        if rc != 0:
-            msg = "Unable to print previous message. subprocess.call error return code = %d command=%s" % (rc, cmd)
-            print (msg)
-            # sysmsg = "cat %s > %s\n" % (msg,self.loghistory)
-            # os.system(sysmgs)
-            self.cleanup(1)                
-        else:
+
+        print(message)
+
+        try:
+            with open(self.loghistory, 'a') as logfile:
+                logfile.write(message + '\n')
             return OK
-                
+        except OSError as e:
+            print("ERROR: Unable to write to loghistory file (%s). %s" % (self.loghistory, e))
+            return ERR                
+
     
     ########################
     def executecmd(self,cmd,results):
         if results:
-            p = Popen(cmd, shell=True, stdout=PIPE)
-            out, err = p.communicate()
-            if err is not None:            
-                self.printit("%s: popen.communicate error %s" % (err))
-                return ERR,"",err            
-            
-            # remove 'b' and other nonprintable characters    
-            #print ("executecmd: out=%s   out.decode=%s" % (out, out.decode("utf-8")))
-            return OK, out.decode("utf-8"), ""    
-        else:
-            # NOTE: subprocess.call command will not return an error for a subsequent error in the called routine, so need to handle stderr
-            self.stdout.truncate()
-            self.stderr.truncate()
             try:
-                # rc = subprocess.call(cmd, shell=True,bufsize=0)  
-                rc = subprocess.call(cmd, shell=True,bufsize=0,stdout=self.stdout, stderr=self.stderr)  
-                if rc != 0:
-                    self.printit("%s: executecmd.subprocess.call error rc=%d cmd=%s" % (self.start,rc, cmd))
-                    return ERR,"",""
-            # note, not catching subprocess.call errors for sendmail!
-            except OSError:
-                self.printit( "executecmd.subprocess.call error2: %s" % str(exc))
-                return ERR,"",""
-            except Exception as exc:
-                self.printit( "executecmd.subprocess.call error3: %s" % str(exc))
-                return ERR,"",""
-            finally:    
-                # check stderr for errors
-                now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                    
-                self.printit ('%s: checking for errors...' % now)
-                self.stderr.seek(0)
-                lines = self.stderr.readlines()
-                alen  = len(lines)
-                if alen > 0:
-                    # something must have been written there, so get it
-                    buffer = ''
-                    for aline in lines:
-                        buffer = buffer + "%s" % aline
-                    # replace embedded ticks and newline characters
-                    buffer = buffer.replace("'", "*")
-                    buffer = buffer.replace('"', "*")
-                    buffer = buffer.replace('\n', '***')
-                    self.printit( "executecmd.subprocess.call error4: error=%s   cmd=%s " % (buffer,cmd))
-                    self.printit( "Consider using another MAILX format: default, custom1, custom2.")
-                    return ERR,"",""
-                else:    
-                    return OK,"",""                    
-        return OK,"",""                    
+                p = Popen(cmd, shell=True, stdout=PIPE, stderr=PIPE)
+                out, err = p.communicate()
+                now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+                if p.returncode != 0:
+                    errmsg = err.decode("utf-8", errors="replace")
+                    self.printit("%s ERROR: executecmd command failed rc=%d cmd=%s error=%s" % (now, p.returncode, cmd, errmsg))
+                    return ERR, "", errmsg
+
+                return OK, out.decode("utf-8", errors="replace"), ""
+
+            except Exception as e:
+                now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                self.printit("%s ERROR: executecmd execution error: %s" % (now, e))
+                return ERR, "", str(e)
+
+        else:
+            self.stdout.seek(0)
+            self.stdout.truncate()
+            self.stderr.seek(0)
+            self.stderr.truncate()
+
+            try:
+                rc = subprocess.call(cmd, shell=True, bufsize=0, stdout=self.stdout, stderr=self.stderr)
+            except Exception as e:
+                now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                self.printit("%s ERROR: executecmd.subprocess.call error: %s" % (now, e))
+                return ERR, "", str(e)
+
+            now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            if rc != 0:
+                self.printit("%s ERROR: executecmd.subprocess.call error rc=%d cmd=%s" % (now, rc, cmd))
+                return ERR, "", ""
+
+            self.stdout.flush()
+            self.stderr.flush()
+            self.stderr.seek(0)
+            lines = self.stderr.readlines()
+
+            if lines:
+                buffer = ''.join(aline.decode("utf-8", errors="replace") if isinstance(aline, bytes) else aline for aline in lines)
+                buffer = buffer.replace("'", "*").replace('"', "*").replace('\n', '***')
+                self.printit("%s ERROR: executecmd.subprocess.call error4: error=%s cmd=%s" % (now, buffer, cmd))
+                self.printit("%s ERROR: Consider using another MAILX format: default, custom1, custom2." % now)
+                return ERR, "", ""
+
+            return OK, "", ""
+
+        return OK, "", ""
+        
         
     ########################
     def sendSMSmsg(self, message):
@@ -1313,7 +1344,7 @@ class pgmon:
         server.login(fromaddr, smtp_password)
         if self.debug:
             now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            self.printit("%s: DEBUG: SendSMSmsg: from: %s to: %s. subject: %s Text = %s" % (now,fromaddr,toaddr,msg_body))
+            self.printit("%s DEBUG:  SendSMSmsg: from: %s to: %s. subject: %s Text = %s" % (now,fromaddr,toaddr,msg_body))
         server.sendmail(fromaddr, toaddr, msg_body)
         server.quit()
 
@@ -1337,9 +1368,11 @@ class pgmon:
         
         body = message
         msg.attach(MIMEText(body, 'plain'))
+
         step = ''
         text = ''
-        try:
+        exceptiontype = ''
+        try:        
             step = "smtplib.SMTP"
             server = smtplib.SMTP(smtp_server, smtp_port)
             if self.verbose:
@@ -1354,11 +1387,13 @@ class pgmon:
             server.quit()
 
             if self.verbose:
-                self.printit("Sent SMTP email from: %s to: %s. subject: %s Text = %s" % (fromaddr,toaddr,msg['Subject'],text))
+                now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                self.printit("%s INFO:   Sent SMTP email from: %s to: %s. subject: %s Text = %s" % (now,fromaddr,toaddr,msg['Subject'],text))
     
             if self.sms != '':
                 rc = self.sendSMSmsg(message)
                 return rc
+            return OK
         
         except smtplib.SMTPServerDisconnected as e:
             # exceptiontype = "SMTPServerDisconnected Error: %d %s" % (e.smtp_code, e.smtp_error)
@@ -1398,7 +1433,7 @@ class pgmon:
 
         if self.debug:
             now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            self.printit("%s: DEBUG: sendalert msg=%s" % (now,msg))
+            self.printit("%s DEBUG:  sendalert msg=%s" % (now,msg))
 
         # decode for utf-8
         msg = msg.strip()                
@@ -1421,7 +1456,7 @@ class pgmon:
             now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             if self.mailx_format == 'default':
                 if self.debug:
-                    self.printit("%s: DEBUG: Using MAILX default format." % now)                        
+                    self.printit("%s DEBUG:  Using MAILX default format." % now)                        
                 cmd = 'echo \'%s\' | %s -s "%s" %s -a "From: %s"' % (msg, self.mailbin, subject, self.to, self.from_)
                         
             # new custom format for 2017 redhat ec2 instance.  This one also works for CentOS 8.
@@ -1430,15 +1465,14 @@ class pgmon:
                 cmd = 'echo \'%s\' | %s -s "%s" %s' % (msg, self.mailbin, subject, self.to)
                 if self.debug:
                     #pass
-                    self.printit("%s: DEBUG: Using MAILX custom1 format. mailbin=%s  subject=%s  to=%s" % (now, self.mailbin, subject, self.to))
-                    #self.printit("%s: DEBUG: Using MAILX custom1 format. cmd=%s" % (now, cmd))
+                    self.printit("%s DEBUG:  Using MAILX custom1 format. mailbin=%s  subject=%s  to=%s" % (now, self.mailbin, subject, self.to))
             
             # new custom format for 2018 CentOS 7 ec2 instance
             # echo 'testing 11111'    | mailx      -r xx@vitalehouse.com -s "pg_alert (QA PERFORMANCE)" michael@vitalehouse.com
             elif self.mailx_format == 'custom2':
                 if self.debug:
                     #pass
-                    self.printit("%s: DEBUG: Using MAILX custom2 format." % now)            
+                    self.printit("%s DEBUG:  Using MAILX custom2 format." % now)            
                 cmd = 'echo \'%s\' | %s -r %s -s "%s" %s' % (msg, self.mailbin, self.from_, subject, self.to)
             
 
@@ -1450,10 +1484,9 @@ class pgmon:
             if self.debug:
                 pass
                 #now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                #self.printit('%s: DEBUG: MailX Alert Command --> %s' % (now,cmd))
             if self.debug:
                 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                print("%s: DEBUG: executing command: %s" % (now,cmd))    
+                print("%s DEBUG:  executing command: %s" % (now,cmd))    
             rc,out,errs = self.executecmd(cmd,False)
             if rc != 0:
                 self.printit("MAILX Error: %d *%s* *%s*" % (rc, out, errs))
@@ -1469,7 +1502,7 @@ class pgmon:
                 cmd = "echo -e 'To: %s\nFrom: %s\nSubject: %s\n\n%s' | ssmtp %s" % (self.to, self.from_, subject, msg, self.to)
             if self.debug:
                 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                self.printit("%s: DEBUG: SSMTP Alert Command --> %s" % (now, cmd))
+                self.printit("%s DEBUG:  SSMTP Alert Command --> %s" % (now, cmd))
             rc,out,errs = self.executecmd(cmd,False)
             if rc != 0:
                 return ERR;            
@@ -1477,14 +1510,14 @@ class pgmon:
             # assume SMTP
             if self.debug:
                 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                self.printit("DEBUG: SMTP Alert Command --> %s" % (now, msg))
+                self.printit("DEBUG:  SMTP Alert Command --> %s" % (now, msg))
             rc = self.sendSMTPmsg(msg)
             if rc != 0:
                 return ERR;
 
         self.alertcnt = self.alertcnt + 1
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")        
-        self.printit("%s: ***ALERT(%d) SENT***: %s\n" % (now, self.alertcnt, msg))    
+        self.printit("%s ***ALERT(%d) SENT***: %s\n" % (now, self.alertcnt, msg))    
         return OK
 
     ########################
@@ -1511,7 +1544,7 @@ class pgmon:
             for arow in rows:
                 self.dbstats.append([arow[0], arow[1], arow[2], arow[3], arow[4]])
             cur.close()
-            self.printit("%s: dbstats initialization. Found %d databases for dbstats." % (now,len(self.dbstats)))
+            self.printit("%s INFO:   dbstats initialization. Found %d databases for dbstats." % (now,len(self.dbstats)))
             return OK
 
         for arow in rows:
@@ -1530,14 +1563,20 @@ class pgmon:
                 # now compare and issue alerts accordingly.
                 if cdatname == datname:            
                     if conflicts  != cconflicts:
-                        msg = "%s: db stat alert: %d conflicts detected in %s." % (now, conflicts - cconflicts, datname)
+                        msg = "%s db stat alert: %d conflicts detected in %s." % (now, conflicts - cconflicts, datname)
                         rc = self.sendalert(msg)
                     if temp_bytes != ctemp_bytes:
-                        if (ctemp_bytes - temp_bytes) > self.tempbytesthreshold:
-                            msg = "%s: db stat alert: %d conflicts detected in %s." % (now, temp_bytes - ctemp_bytes, datname)
-                            rc = self.sendalert(msg)                
+                        if temp_bytes > ctemp_bytes:
+                            temp_diff = temp_bytes - ctemp_bytes
+                        else:
+                            temp_diff = ctemp_bytes - temp_bytes
+
+                        if temp_diff > self.tempbytesthreshold:
+                            msg = "%s db stat alert: %d temporary bytes change detected in %s." % (now, temp_diff, datname)
+                            rc = self.sendalert(msg)                            
+                            
                     if deadlocks  != cdeadlocks:
-                        msg = "%s: db stat alert: %d deadlocks detected in %s." % (now, deadlocks - cdeadlocks, datname)
+                        msg = "%s db stat alert: %d deadlocks detected in %s." % (now, deadlocks - cdeadlocks, datname)
                         rc = self.sendalert(msg)                
 
         # repopulate dbstats list
@@ -1562,7 +1601,7 @@ class pgmon:
             self.bypass = True
             if msg == '':
                 return False
-            self.printit("%s: Bypassing invalid log line: ***%s***\n" % (now,msg))
+            self.printit("%s WARN:  Bypassing invalid log line: ***%s***\n" % (now,msg))
         return False
 
     ########################
@@ -1602,7 +1641,7 @@ class pgmon:
             return seconds
         else:
             now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                    
-            self.printit("%s: could not find time waited(5). Alert will not be triggered. %s" % (now, searchstring))
+            self.printit("%s could not find time waited(5). Alert will not be triggered. %s" % (now, searchstring))
             return NOTFOUND
     
         return NOTFOUND
@@ -1616,7 +1655,7 @@ class pgmon:
         if pos < 0:
             if self.verbose:
                 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                    
-                self.printit("%s: VERBOSE: could not find beginning of sqlstate, *%s*, in msg, %s\n" % (now, self.sqlstateprefix, msg))
+                self.printit("%s VERBOSE:could not find beginning of sqlstate, *%s*, in msg, %s\n" % (now, self.sqlstateprefix, msg))
             return ""
         s1 = msg[pos+len(self.sqlstateprefix):]            
         if not self.check_sqlstate:
@@ -1628,7 +1667,7 @@ class pgmon:
         if pos < 0:
             if self.verbose:
                 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                    
-                self.printit("%s: VERBOSE: could not find end of sqlstate in msg, %s\n" % (now, msg))        
+                self.printit("%s VERBOSE:could not find end of sqlstate in msg, %s\n" % (now, msg))        
             return ""
         s1 = s1[0:pos]
         
@@ -1638,16 +1677,16 @@ class pgmon:
         if not s1.isalnum():
             # Invalid sqlstate found: 07:16:00.054 EDT [25932]
             self.check_sqlstate = False
-            self.printit("%s: Invalid sqlstate found: %s.  SQLSTATE checking is disabled. Fix log_line_prefix so SQLSTATE can be found correctly next time.\n" % (now, s1))        
+            self.printit("%s Invalid sqlstate found: %s.  SQLSTATE checking is disabled. Fix log_line_prefix so SQLSTATE can be found correctly next time.\n" % (now, s1))        
         if s1 == '00000':
             return s1
         else:
             if self.verbose:
                 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                    
                 if self.check_sqlstate:
-                    self.printit("%s: VERBOSE: found sqlstate(%s) in msg, %s\n" % (now, s1, msg))        
+                    self.printit("%s VERBOSE:found sqlstate(%s) in msg, %s\n" % (now, s1, msg))        
                 else:
-                    self.printit("%s: VERBOSE: found sqlstate(%s) in msg but sqlstate checking is disabled, %s\n" % (now, s1, msg))        
+                    self.printit("%s VERBOSE:found sqlstate(%s) in msg but sqlstate checking is disabled, %s\n" % (now, s1, msg))        
         return s1
 
     ########################
@@ -1675,13 +1714,13 @@ class pgmon:
             index = sqlstate.find(item)
             if index == 0:
                 # we found a state class match so bypass
-                self.printit("%s: Bypassing found filtered sqlclass, %s. msg= %s\n" % (now,item,msg))
+                self.printit("%s Bypassing found filtered sqlclass, %s. msg= %s\n" % (now,item,msg))
                 return True, sqlstate
                      
         # match sqlstate with the ones we are filtering out
         for item in self.sqlstates:
             if item == sqlstate:
-                self.printit("%s: Bypassing sqlstate, %s. msg= %s\n" % (now,sqlstate,msg))
+                self.printit("%s Bypassing sqlstate, %s. msg= %s\n" % (now,sqlstate,msg))
                 return True, sqlstate
 
         # Handle statement timeouts in evaluatelog
@@ -1721,7 +1760,7 @@ class pgmon:
             if msg.find(self.lockfilter) > 0:
                 # found lock filter so bypass it
                 self.bypass = True
-                self.printit("%s: Bypassing found lock filter\n" % (now))
+                self.printit("%s Bypassing found lock filter\n" % (now))
                 return False
 
             seconds = self.getlockwaitseconds('acquired ShareLock on transaction',msg)
@@ -1732,7 +1771,7 @@ class pgmon:
                 return True
             else:
                 self.bypass = True
-                self.printit("%s: Bypassing lock wait seconds (%d) below threshold (%d).\n" % (now, seconds, self.lockwait))
+                self.printit("%s Bypassing lock wait seconds (%d) below threshold (%d).\n" % (now, seconds, self.lockwait))
                 return False
                 
         if self.grepfilter.find('acquired ExclusiveLock on\|') > 0 and msg.find('acquired ExclusiveLock on ') > 0:
@@ -1740,7 +1779,7 @@ class pgmon:
             if msg.find(self.lockfilter) > 0:
                 # found lock filter so bypass it
                 self.bypass = True
-                self.printit("%s: Bypassing found lock filter\n")
+                self.printit("%s Bypassing found lock filter\n")
                 return False
         
             seconds = self.getlockwaitseconds('acquired ExclusiveLock on ',msg)
@@ -1748,7 +1787,7 @@ class pgmon:
                 return True
             else:
                 self.bypass = True
-                self.printit("%s: Bypassing lock wait seconds (%d) below threshold (%d).\n" % (now, seconds, self.lockwait))
+                self.printit("%s Bypassing lock wait seconds (%d) below threshold (%d).\n" % (now, seconds, self.lockwait))
                 return False
 
         if self.grepfilter.find('still waiting for \|') > 0 and msg.find('still waiting for ') > 0:
@@ -1756,7 +1795,7 @@ class pgmon:
             if msg.find(self.lockfilter) > 0:
                 # found lock filter so bypass it
                 self.bypass = True
-                self.printit("%s: Bypassing found lock filter\n" % now)
+                self.printit("%s Bypassing found lock filter\n" % now)
                 return False
         
             seconds = self.getlockwaitseconds('still waiting for ',msg)
@@ -1764,14 +1803,14 @@ class pgmon:
                 return True
             else:
                 self.bypass = True
-                self.printit("%s: Bypassing lock wait seconds (%d) below threshold (%d).\n" % (now, seconds, self.lockwait))
+                self.printit("%s Bypassing lock wait seconds (%d) below threshold (%d).\n" % (now, seconds, self.lockwait))
                 return False
 
         # handle sqlstate = 57014, for statement timeouts. Consider bypassing statement timeouts, but always report user requested ones
         if sqlstate == '57014':
             if self.alert_stmt_timeout:
                 if self.verbose:
-                    self.printit("%s: VERBOSE: alert on statement timeout is turned on. Sending alert for msg: %s\n" % (now,msg))
+                    self.printit("%s VERBOSE:alert qualified: statement timeout. msg: %s\n" % (now,msg))
                 return True
             else:
                 if msg.find('ERROR:  canceling statement due to user request') > 0:
@@ -1781,23 +1820,23 @@ class pgmon:
                     # bypass these since it is system or application context controlled
                     self.bypass = True
                     if self.verbose:
-                        self.printit("%s: VERBOSE: bypassing application or system initiated statement timout." % now)
+                        self.printit("%s VERBOSE:bypassing application or system initiated statement timout." % now)
                     return False
                 else:
                     # for anything else unforeseen, report it
                     if self.verbose:
-                        self.printit("%s: VERBOSE: defaulting action for sqlstate, 57014.  Sending alert for msg: %s\n" % (now,msg))
+                        self.printit("%s VERBOSE:alert qualified: defaulting action for sqlstate 57014. msg: %s\n" % (now,msg))
                     return True
 
         # before defaulting to alert valid, check if we already bypasses stuff like application names in checkconnections.
         self.bypass = self.lastcheck(msg, sqlstate)
         if self.bypass:
             if self.verbose:
-                self.printit("%s: VERBOSE: bypass(1) for msg: %s\n" % (now,msg))            
+                self.printit("%s VERBOSE:bypass(1) for msg: %s\n" % (now,msg))            
             return False
         else:
             if self.verbose:        
-                self.printit("%s: VERBOSE: general default alert. Sending alert for msg: %s\n" % (now,msg))
+                self.printit("%s VERBOSE:alert qualified: general default. msg: %s\n" % (now,msg))
             return True
 
 
@@ -1805,7 +1844,7 @@ class pgmon:
     def stillsuspended(self):
     
         # re-initiate reading of config file
-        config = configparser.SafeConfigParser({'sqlstate':'', 'sqlclass':'', 'lockwait':'', 'checkinterval':'', \
+        config = configparser.ConfigParser({'sqlstate':'', 'sqlclass':'', 'lockwait':'', 'checkinterval':'', \
                  'loadthreshold':'', 'dirthreshold':'', 'idletransthreshold':'', 'querytransthreshold':'', 'pgsql_tmp_threshold':'', 'lockfilter':'',  \
                  'log_directory':'', 'alert_directory':'', 'ignore_autovacdaemon':'True', 'ignore_uservac':'True', 'tempbytesthreshold':'', 'slaves':'', \
                  'monitorlag':'False', 'alert_stmt_timeout':'False', 'ignoreapps':'', 'ignoreusers':'','ignorequeries':'', 'suspended':'False'})        
@@ -1821,7 +1860,7 @@ class pgmon:
         while True:
             if self.stillsuspended():
                 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                    
-                self.printit("%s: pg_alert in user-initiated suspended state.\n" % (now))
+                self.printit("%s pg_alert in user-initiated suspended state.\n" % (now))
                 time.sleep(60)
             else:
                 break
@@ -1843,7 +1882,7 @@ class pgmon:
         x = x.replace(" ", "")
         if not x.isdigit():
             now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            self.printit ("%s: WARNING: Unexpected log timestamp, %s. Unable to determine whether to bypass this log alert." % (now,msg))        
+            self.printit ("%s WARNING: Unexpected log timestamp, %s. Unable to determine whether to bypass this log alert." % (now,msg))        
         
         if self.lastalert == '':
             self.lastalert = value
@@ -1853,13 +1892,13 @@ class pgmon:
             else:
                 if self.debug:
                     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    self.printit ("%s: DEBUG: bypassing old alert. old=%s new=%s.  %s" % (now,self.lastalert, value, msg))
+                    self.printit ("%s DEBUG:  bypassing old alert. old=%s new=%s.  %s" % (now,self.lastalert, value, msg))
                 return False
 
         # check for obvious things like deadlocks
         # 2016-12-29 08:02:06.542 CST blackjack_prod@blackjack_prod[10513:UPDATE waiting] [3692-1] 10.80.129.86(46448) B::Backend::Job::AppraiserStatisticsCollector tx=3245985290,ss=00000: LOG:  process 10513 detected deadlock while waiting for ShareLock on transaction 3245985292 after 1000.098 ms
         if msg.find('detected deadlock while waiting for') > 0:
-            self.printit("%s: Detected deadlock: %s\n" % (now,msg))
+            self.printit("%s Detected deadlock: %s\n" % (now,msg))
             return True
 
         alertvalid = self.evaluatelog(msg, sqlstate)
@@ -1909,8 +1948,9 @@ class pgmon:
             return OK
         
         cur = self.conn.cursor()
-        sql = "select usename, application_name, client_addr, client_hostname, state, sent_location, write_location, " \
-              "flush_location, replay_location, sync_priority, sync_state from pg_stat_replication order by application_name"
+        sql = "select usename, application_name, client_addr, client_hostname, sent_lsn, write_lsn, flush_lsn, replay_lsn,  " \
+              "sync_priority, sync_state from pg_stat_replication order by application_name"
+
         try:
             cur.execute(sql)
         except psycopg2.Error as e:
@@ -1923,7 +1963,7 @@ class pgmon:
         rows = cur.fetchall()
         if not rows:
             cur.close()
-            msg = "%s: No slaves active. Expected %s" % (now,self.slaves)
+            msg = "%s No slaves active. Expected %s" % (now,self.slaves)
             if self.lastslavealert is None or int(timenow - self.lastslavealert) > self.checkinterval:
                 self.lastslavealert = time.time()            
                 self.printit(msg)
@@ -1944,10 +1984,10 @@ class pgmon:
                 state            = arow[4]
                 if state is None:
                     state = ''
-                sent_location    = arow[5]
-                write_location   = arow[6]
-                flush_location   = arow[7]    
-                replay_location  = arow[8]
+                sent_lsn         = arow[5]
+                write_lsn        = arow[6]
+                flush_lsn        = arow[7]    
+                replay_lsn       = arow[8]
                 sync_priority    = arow[9]
                 sync_state       = arow[10]
                 if sync_state is None:
@@ -1958,28 +1998,28 @@ class pgmon:
             if not foundit:
                 if self.lastslavealert is None or int(timenow - self.lastslavealert) > self.checkinterval:
                     self.lastslavealert = time.time()            
-                    msg = "%s: Slave (%s) not active." % (now, aslave)
+                    msg = "%s Slave (%s) not active." % (now, aslave)
        	            self.printit(msg)
                     rc = self.sendalert(msg)
             else:
                 if self.verbose:
-                    msg = "%s: VERBOSE: state=%s sync_state=%s client_addr=%s application_name=%s sent_location=%s write_location=%s" \
-                          % (now, state, sync_state, client_addr, application_name, sent_location, write_location)
+                    msg = "%s VERBOSE:state=%s sync_state=%s client_addr=%s application_name=%s sent_lsn=%s write_lsn=%s" \
+                          % (now, state, sync_state, client_addr, application_name, sent_lsn, write_lsn)
                     self.printit(msg)
 	            
 	        # check for replication state and lag
                 if state != 'streaming':
                     if self.lastslavealert is None or int(timenow - self.lastslavealert) > self.checkinterval:
                         self.lastslavealert = time.time()                            
-                        msg = "%s: %s slave (%s) not streaming (%s)." % (now, sync_state, aslave, state)
+                        msg = "%s %s slave (%s) not streaming (%s)." % (now, sync_state, aslave, state)
                         self.printit(msg)
                         rc = self.sendalert(msg)                    
-                elif sent_location != write_location:
+                elif sent_lsn != write_lsn:
                     if self.monitorlag:
                         if self.lastslavealert is None or int(timenow - self.lastslavealert) > self.checkinterval:
                             self.lastslavealert = time.time()            
                             # minimally ensure sent and write locations are the same, even if flush and replay are not the same
-                            msg = "%s: %s slave (%s) is lagging (%s). sent=%s/write=%s." % (now, sync_state, aslave, state, sent_location, write_location)
+                            msg = "%s %s slave (%s) is lagging (%s). sent=%s/write=%s." % (now, sync_state, aslave, state, sent_lsn, write_lsn)
                             self.printit(msg)
                             rc = self.sendalert(msg)                                    
         cur.close()
@@ -2013,14 +2053,14 @@ class pgmon:
         timenow = time.time()
         if perc > 90:
             if self.lastconntotalert is None or int(timenow - self.lastconntotalert) > self.checkinterval:
-                msg = "%s: current connections (%d) exceed 90%% threshold." % (now,self.totalconn)
+                msg = "%s current connections (%d) exceed 90%% threshold." % (now,self.totalconn)
                 self.lastconntotalert = time.time()
                 self.sendalert(msg)
         
         # compare active connections in light of number of CPUs
         if self.activeconn > self.cpus:
             if self.lastconnactivealert is None or int(timenow - self.lastconnactivealert) > self.checkinterval:
-                msg = "%s: active connections (%d) exceeds CPUs (%d)." % (now, self.activeconn, self.cpus)
+                msg = "%s active connections (%d) exceeds CPUs (%d)." % (now, self.activeconn, self.cpus)
                 self.lastconnactivealert = time.time()
                 self.sendalert(msg)        
         
@@ -2029,8 +2069,6 @@ class pgmon:
         sql = "select pid, datname, usename, state, coalesce(application_name,' ') as application_name, client_addr, round(EXTRACT(EPOCH FROM (now() - query_start))) as seconds, " \
               "substring(query,1,9999) as query from pg_stat_activity where state = 'idle in transaction' and " \
               "round(EXTRACT(EPOCH FROM (now() - query_start))) > %d" % (self.idletransthreshold)
-        #if self.debug:
-        #    self.printit("%s: DEBUG: idle in transaction query check: %s\n" % (now,sql))
         try:
             cur.execute(sql)
         except psycopg2.Error as e:
@@ -2060,7 +2098,7 @@ class pgmon:
                     rowvalues = "pid=%d db=%s user=%s seconds=%d app=%s client_addr=%s seconds=%d \n\nquery=%s\n\n" % \
                                 (pid, datname, usename, seconds, application_name, client_addr, seconds, query)
                     results = results + rowvalues
-                msg = "%s: %d idle in transaction transactions longer than %d seconds detected.\n%s" % (now,rowcnt, self.idletransthreshold, results)
+                msg = "%s %d idle in transaction transactions longer than %d seconds detected.\n%s" % (now,rowcnt, self.idletransthreshold, results)
                 self.sendalert(msg)        
         cur.close()
 
@@ -2135,8 +2173,6 @@ class pgmon:
         sql = "select pid, datname, usename, state, coalesce(application_name,' ') as application_name, client_addr, round(EXTRACT(EPOCH FROM (now() - query_start))) as seconds, " \
               "substring(query,1,9999) as query from pg_stat_activity where state = 'active' %s %s %s %s %s and " \
               "round(EXTRACT(EPOCH FROM (now() - query_start))) > %d" % (s1,s2,s3,s4,s5,self.querytransthreshold)
-        #if self.debug:
-        #    self.printit("%s: DEBUG: long query check: %s\n" % (now,sql))
         try:
             cur.execute(sql)
         except psycopg2.Error as e:
@@ -2162,7 +2198,7 @@ class pgmon:
                             (pid, datname, usename, seconds, application_name, client_addr, seconds, query)
                 results = results + rowvalues
             if self.lastconnqueryalert is None or int(timenow - self.lastconnqueryalert) > self.checkinterval:        
-                msg = "%s: %d query transactions longer than %d seconds detected.\n%s" % (now,rowcnt, self.querytransthreshold, results)
+                msg = "%s %d query transactions longer than %d seconds detected.\n%s" % (now,rowcnt, self.querytransthreshold, results)
                 self.lastconnqueryalert = time.time()
                 self.sendalert(msg)        
         cur.close()
@@ -2189,25 +2225,21 @@ class pgmon:
 
         res = data_dir_perc.split('%')
         if int(res[0]) > self.dirthreshold:
-            msg = "%s: data directory usage threshold (%d%%) exceeded (%d%%)." % (now, self.dirthreshold, int(res[0]))
+            msg = "%s data directory usage threshold (%d%%) exceeded (%d%%)." % (now, self.dirthreshold, int(res[0]))
             self.sendalert(msg)             
         
         # get real path of pg_xlog directory.  If it is not a symlink and not a mount point, the entire mount point for the data directory mount point is returned.
         # otherwise it is the mount point for the symlinked pg_xlog directory
         # v 2.3 fix
-        if self.pgversion > 9.6:
-            pg_wal = os.path.realpath(self.data_directory + "/pg_wal")        
-            cmd = "df -h " + pg_wal + " | tail -n1 | awk '{print $5}'"
-        else:
-            pg_xlog = os.path.realpath(self.data_directory + "/pg_xlog")
-            cmd = "df -h " + pg_xlog + " | tail -n1 | awk '{print $5}'"
+        pg_wal = os.path.realpath(self.data_directory + "/pg_wal")        
+        cmd = "df -h " + pg_wal + " | tail -n1 | awk '{print $5}'"
         rc,pg_xlog_perc,errs = self.executecmd(cmd, True)
         if rc != 0:
             return ERR
         
         res = pg_xlog_perc.split('%')
         if int(res[0]) > self.dirthreshold:
-            msg = "%s: pg_xlog directory usage threshold (%d%%) exceeded (%d%%)." % (now, self.dirthreshold, int(res[0]))
+            msg = "%s pg_xlog directory usage threshold (%d%%) exceeded (%d%%)." % (now, self.dirthreshold, int(res[0]))
             self.sendalert(msg)       
         
         # use du for other directories sizes
@@ -2228,14 +2260,14 @@ class pgmon:
                 threshold="{:,}".format(self.pgsql_tmp_threshold)
                 if bytes > 999999999:
                     gbs =  float(bytes)/1024/1024/1024
-                    msg = "%s: pgsql_tmp directory size exceeds threshold (%s bytes): %.2f GB" % (now,threshold,gbs)
+                    msg = "%s pgsql_tmp directory size exceeds threshold (%s bytes): %.2f GB" % (now,threshold,gbs)
                     self.sendalert(msg)                   
                 elif bytes > 999999:
                     mbs = float(bytes)/1024/1024
-                    msg = "%s: pgsql_tmp directory size exceeds threshold (%s bytes): %.2f MB" % (now,threshold,mbs)
+                    msg = "%s pgsql_tmp directory size exceeds threshold (%s bytes): %.2f MB" % (now,threshold,mbs)
                     self.sendalert(msg)                   
                 else:
-                    msg = "%s: pgsql_tmp directory size exceeds threshold (%s bytes): %d bytes" % (now,threshold,bytes)
+                    msg = "%s pgsql_tmp directory size exceeds threshold (%s bytes): %d bytes" % (now,threshold,bytes)
                     self.sendalert(msg)          
        
         return OK
@@ -2258,6 +2290,7 @@ class pgmon:
         # print "load1=%.2f pct=%.2f load5=%.2f pct=%.2f load15=%.2f pct=%.2f loadmax=%.2f  maxpct load=%.2f" \
         #       % (self.load1, loadpct1, self.load5, loadpct5, self.load15, loadpct15, self.loadmax, actualmax)
 
+        timenow = time.time()
         if self.load1 > self.loadmax or self.load5 > self.loadmax or self.load15 > self.loadmax:
             if self.lastloadalert is None or int(timenow - self.lastloadalert) > self.checkinterval:
                 msg = "%d%% load threshold exceeded (%.2f) exceeded. cpus(%d) load1min(%.2f) load5min(%.2f) load15min(%.2f)" \
@@ -2298,66 +2331,75 @@ class pgmon:
             now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                    
             if self.connected:
                 if self.rds:
-                    # msg = "%s: VERBOSE: cpus(%d)  maxconn=%d  totalconn=%d  activeconn=%d\n" \
-                    msg = "%s: VERBOSE: cpus(%d)  maxconn=%d  totalconn=%d  activeconn=%d" \
+                    # msg = "%s VERBOSE:cpus(%d)  maxconn=%d  totalconn=%d  activeconn=%d\n" \
+                    msg = "%s VERBOSE: cpus(%d)  maxconn=%d  totalconn=%d  activeconn=%d" \
                           % (now, self.cpus, self.maxconn, self.totalconn, self.activeconn)
                 else:
-                    msg = "%s: VERBOSE: cpus(%d)  load1min(%.2f)  Load5min(%.2f)  Load15min(%.2f) loadthreshold(%d%%) loadmax(%.2f) maxconn=%d  totalconn=%d  activeconn=%d" \
+                    msg = "%s VERBOSE:cpus(%d)  load1min(%.2f)  Load5min(%.2f)  Load15min(%.2f) loadthreshold(%d%%) loadmax(%.2f) maxconn=%d  totalconn=%d  activeconn=%d" \
                           % (now, self.cpus, self.load1, self.load5, self.load15, self.loadthreshold, self.loadmax, self.maxconn, self.totalconn, self.activeconn)                
             else:
                 if self.rds:
-                    msg = "%s: VERBOSE: cpus(%d)  load1min(%.2f)  Load5min(%.2f)  Load15min(%.2f) loadthreshold(%d%%) loadmax(%.2f)  DB info not available." \
+                    msg = "%s VERBOSE:cpus(%d)  load1min(%.2f)  Load5min(%.2f)  Load15min(%.2f) loadthreshold(%d%%) loadmax(%.2f)  DB info not available." \
                           % (now, self.cpus, self.load1, self.load5, self.load15, self.loadthreshold, self.loadmax)            
                 else:
-                    msg = "%s: VERBOSE: cpus(%d).  DB info not available." \
+                    msg = "%s VERBOSE:cpus(%d).  DB info not available." \
                           % (now, self.cpus)                            
             self.printit(msg)        
 
         return OK
 
+        
     ########################
     def terminatetail(self):
-        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                                
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if not self.logfile:
+            self.printit("%s INFO:   No logfile specified. Nothing to terminate." % now)
+            return NOTFOUND        
+            
         for proc in psutil.process_iter():
             try:
                 pinfo = proc.as_dict(attrs=['pid', 'name'])
-                apid  = pinfo['pid']
+                apid = pinfo['pid']
                 name = pinfo['name']
+
+                if name != 'timeout':
+                    continue
+
                 afile = '/proc/' + str(apid) + '/cmdline'
-                if name == 'timeout':
-                    try:
-                        # /proc/<pid>/cmdline contains complete command without spaces like this:
-                        # timeout120tail-f/pglog/lenderx/postgresql-2016-1223.logpostgres@msp0llexp022:/proc/1275
-                        if not os.path.exists(afile):
-                            # do nothing. Might be another instance trying to start and this tail never started.
-                            return OK
-                        pidfile = open(afile, 'r')
-                        info = str(pidfile.readline())
-                        if self.debug:
-                            print ("%s: DEBUG: pid=%s  name=%s  pidinfo: %s" % (now, str(apid), name, info))
-                        try:
-                            self.printit("%s: Terminating tail pid(%s)." % (now,str(apid)))
-                            p = psutil.Process(apid)
-                            p.terminate()
-                            return OK
-                        except Exception as e:
-                            self.printit("%s: unable to terminate pid, %s. %s" % (now,str(apid),e))
-                            return ERR
-                        return OK
-                    except Exception as e:
-                        self.printit("%s: unable to open pidfile(%s). %s" % (now,afile,e))
-                        return ERR
-                    return OK    
+                if not os.path.exists(afile):
+                    continue
+
+                with open(afile, 'r') as pidfile:
+                    info = pidfile.read()
+
+                if self.debug:
+                    print("%s DEBUG:  pid=%s  name=%s  pidinfo: %s" % (now, str(apid), name, info))
+
+                # Only terminate the timeout process belonging to this pg_alert instance.
+                if 'tail' not in info or self.logfile not in info:
+                    continue
+
+                try:
+                    self.printit("%s INFO:   Terminating tail pid(%s)." % (now, str(apid)))
+                    proc.terminate()
+                    return OK
+                except psutil.NoSuchProcess:
+                    continue
+                except Exception as e:
+                    self.printit("%s ERROR:  unable to terminate pid, %s. %s" % (now, str(apid), e))
+                    return ERR
+
             except psutil.NoSuchProcess:
-                self.printit("%s: Unable to terminate tail pid: no such process." % now)
-                return ERR
-        self.printit("%s: Tail pid not found. Nothing to terminate." % now)            
-        return NOTFOUND
+                continue
+
+        self.printit("%s INFO:   No active pg_alert tail process found. Nothing to terminate." % now)
+        return NOTFOUND        
+        
 
     ########################
     def showparms(self):
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                    
-        msg = '%s: verbose=%s debug=%s rds=%s sendmail=%s check_sqlstate=%s max_alerts=%d clusterid=%s  pgport=%s  from_=%s  to=%s  minutes=%d  refreshrate=%d  keeplogdays=%d log_dir=%s alert_dir=%s data_directory=%s  ' \
+        msg = '%s verbose=%s debug=%s rds=%s sendmail=%s check_sqlstate=%s max_alerts=%d clusterid=%s  pgport=%s  from_=%s  to=%s  minutes=%d  refreshrate=%d  keeplogdays=%d log_dir=%s alert_dir=%s data_directory=%s  ' \
               'dbname=%s  dbuser=%s  dbhost=%s sqlstates=%s sqlclasses=%s prefix=***%s*** postfix=***%s*** log_line_prefix=%s lockwait=%d checkinterval=%d  loadthreshold=%d  ' \
               'dirthreshold=%d  idletransthreshold=%d querytransthreshold=%d  pgsql_tmp_threshold=%d ignore_autovacdaemon=%s ignore_uservac=%s slaves=%s ignoreapps=%s ' \
               'ignoreusers=%s monitorlag=%s alert_stmt_timeout=%s ignorequeries=%s server_version=%d suspended=%s mail_method=%s smtp_server=%s, smtp_account=%s, logfile=%s\n' \
@@ -2373,7 +2415,7 @@ class pgmon:
     ########################
     def cleanup(self, rc):
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                    
-        self.printit("%s: Cleanup in progress..." % now)
+        self.printit("%s INFO:   Cleanup in progress..." % now)
         if self.alert is not None:
             self.alert.close()
         if self.conn is not None:
@@ -2381,36 +2423,62 @@ class pgmon:
     
         if rc != NOPROGLOCK:
             rc2 = self.terminatetail()
-            self.printit("%s: removing pidfile, %s" % (now,self.pidfile))
+            self.printit("%s INFO:   removing pidfile, %s" % (now,self.pidfile))
             try:
                 os.unlink(self.pidfile)
             except OSError as e:
-                self.printit("%s: OSError attempting to remove pidfile, %s. %s" % (now,self.pidfile, e))
-            except e:
-                self.printit("%s: Unknown exception trying to remove pid file, %s.  %s" % (now, self.pidfile, e))
+                self.printit("%s ERROR:  OSError attempting to remove pidfile, %s. %s" % (now,self.pidfile, e))
+            except Exception as e:
+                self.printit("%s ERROR:  Unknown exception trying to remove pid file, %s.  %s" % (now, self.pidfile, e))                
+                
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                    
-        self.printit("%s: pg_alert ended." % now)
+        self.printit("%s INFO:   pg_alert ended." % now)
         sys.exit(rc)
 
     ########################
     def catch(self, signum, frame):
-        print("xxxx", self, signum, frame)
-        self.printit('User-initiated interrupt detected.')
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S") 
+        self.printit('%s WARN:  User-initiated interrupt detected.' % now)
         self.cleanup(INTERRUPT)        
+
+
+#####################################
+######### GLOBAL EXCEPTION HANDLER ##
+#####################################
+
+def handle_uncaught_exception(exc_type, exc_value, exc_traceback):
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    p.printit("%s FATAL: Unhandled exception: %s" % (now, exc_value))
+
+    for line in traceback.format_exception(exc_type, exc_value, exc_traceback):
+        for detail in line.rstrip().splitlines():
+            p.printit(detail)
+
+    try:
+        p.cleanup(ERR)
+    except SystemExit:
+        raise
+    except Exception as e:
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        print("%s FATAL:  Exception during cleanup: %s" % (now, e), file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+        sys.exit(ERR)
 
 
 #####################################
 ######### MAIN ENTRY POINT ##########
 #####################################
 
-
 # get the class instantiation
 p = pgmon()
+
+# register global exception handler
+sys.excepthook = handle_uncaught_exception
 
 rc = p.initandvalidate()
 if rc != 0:
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")    
-    p.printit("%s: Initialization Error." % now)
+    p.printit("%s Initialization Error." % now)
     p.cleanup(1)    
 
 p.showparms()
@@ -2419,44 +2487,57 @@ p.showparms()
 # we always grep the log file and then tail it.
 #cmd= "timeout %d tail -f %s | grep --line-buffered '%s' > %s 2>&1 &" % (p.seconds, p.logfile, p.grepfilter, p.logalert)
 
-# V3.1 change: do not use case-sensitive greps
-#cmd1= "cat %s | grep --line-buffered '%s' | " % (p.logfile, p.grepfilter)
-cmd1= "cat %s | grep --line-buffered -i '%s' | " % (p.logfile, p.grepfilter)
+# Determine where to resume processing the PostgreSQL log.
+rc, last_timestamp = p.get_last_alert_timestamp()
+if rc != OK:
+    p.cleanup(rc)
 
+rc, resume_position, resume_found = p.find_log_resume_position(last_timestamp)
+if rc != OK:
+    p.cleanup(rc)
+
+now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+if resume_found:
+    p.printit("%s INFO:   Previous alert timestamp found: %s. Resuming at byte position %d." % (now, last_timestamp, resume_position))
+elif last_timestamp != '':
+    p.printit("%s INFO:   Previous alert timestamp %s not found. Assuming a new PostgreSQL log file; scanning from beginning." % (now, last_timestamp))
+else:
+    p.printit("%s INFO:   No previous alert timestamp found. Scanning from beginning." % now)
+
+# Scan the PostgreSQL log starting at the resume position.
+cmd1= "tail -c +%d %s | grep --line-buffered -i '%s' | " % (resume_position + 1, p.logfile, p.grepfilter)
 cmd2= "grep --line-buffered -v '%s' >> %s 2>&1 &" % (p.grepexclude, p.logalert)
 grepcmd=cmd1 + cmd2
+
 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")    
-msg = "%s: Grepping initial pg log file, %s" % (now, p.logfile)
+msg = "%s INFO:   Grepping initial pg log file, %s" % (now, p.logfile)
 p.printit('%s' % msg)
-msg = "%s: %s\n" % (p.start,grepcmd)
+msg = "%s %s\n" % (p.start,grepcmd)
 p.printit('%s' % msg)
 rc,out,errs = p.executecmd(grepcmd,False)
 if rc != 0:
-    p.printit('FATAL: Unable to grep initial pg log file.' % msg)
+    p.printit('FATAL: Unable to grep initial pg log file. rc=%d  errs=%s' % (rc, errs))
     p.cleanup(rc)    
 
 # Start the tail of the pg log file: file format expected: postgresql-YY-MMDD.log
-#cmd= "timeout %d tail -f %s | grep --line-buffered '%s' > %s 2>&1 &" % (p.seconds, p.logfile, p.grepfilter, p.logalert)
-
-# V3.1 change: do not use case-sensitive greps
-#cmd1= "timeout %d tail -f %s | grep --line-buffered '%s' | " % (p.seconds, p.logfile, p.grepfilter)
-cmd1= "timeout %d tail -f %s | grep --line-buffered -i '%s' | " % (p.seconds, p.logfile, p.grepfilter)
-
+cmd1= "timeout %d tail -n 0 -f %s | grep --line-buffered -i '%s' | " % (p.seconds, p.logfile, p.grepfilter)
 cmd2= "grep --line-buffered -v '%s' >> %s 2>&1 &" % (p.grepexclude, p.logalert)
 grepcmd=cmd1 + cmd2
 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")    
-msg = "%s: Tailing initial pg log file, %s" % (now, p.logfile)
+msg = "%s INFO:   Tailing initial pg log file, %s" % (now, p.logfile)
 p.printit('%s' % msg)
-msg = "%s: %s\n" % (p.start,grepcmd)
+msg = "%s %s\n" % (p.start,grepcmd)
 p.printit('%s' % msg)
 rc,out,errs = p.executecmd(grepcmd,False)
 if rc != 0:
-    p.cleanup(rc)    
+    p.cleanup(rc)
+    p.tail_started = True
 
 # delay for a few secs before attempting to access the alerts log file
 time.sleep(2)
 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")    
-p.printit("%s: Background tail started successfully.  Tailing alerts file now...\n" % now)
+p.printit("%s INFO:   Background tail started successfully.  Tailing alerts file now..." % now)
     
 timeout = time.time() + p.seconds + 2
 # outer loop is for duration of the tail of pg log
@@ -2512,32 +2593,33 @@ while True:
             if p.rds:
                 # we need to grep the new log file
                 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")    
-                cmd1= "cat %s | grep --line-buffered '%s' | " % (p.logfile, p.grepfilter)
+                cmd1= "cat %s | grep --line-buffered -i '%s' | " % (p.logfile, p.grepfilter)
                 cmd2= "grep --line-buffered -v '%s' >> %s 2>&1 &" % (p.grepexclude, p.logalert)                
                 grepcmd=cmd1 + cmd2
-                msg = "%s: grepping new log file... %s\n" % (now,grepcmd)
+                msg = "%s grepping new log file... %s\n" % (now,grepcmd)
                 rc,out,errs = p.executecmd(grepcmd,False)
                 if rc != 0:
                     p.printit("FATAL ERROR: Unable to grep new pg log file, %s" % p.logfile)
                     p.cleanup(rc)    
 
-            # start the new tail
-            cmd1= "timeout %d tail -f %s | grep --line-buffered '%s' | " % (p.seconds, p.logfile, p.grepfilter)
-            cmd2= "grep --line-buffered -v '%s' >> %s 2>&1 &" % (p.grepexclude, p.logalert)
-            grepcmd=cmd1 + cmd2
-            now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")    
-            msg = "%s: Restarting grep tail... %s\n" % (now,grepcmd)
-            p.printit('%s' % msg)
-            rc,out,errs = p.executecmd(grepcmd,False)
-            if rc != 0:
-                p.printit("FATAL ERROR: Unable to restart the grep tail.")
-                p.cleanup(rc)    
+            # start a new tail only if the log file changed or we are using RDS
+            if p.rds or p.oldlogfile != p.logfile:
+                cmd1= "timeout %d tail -n 0 -f %s | grep --line-buffered -i '%s' | " % (p.seconds, p.logfile, p.grepfilter)
+                cmd2= "grep --line-buffered -v '%s' >> %s 2>&1 &" % (p.grepexclude, p.logalert)
+                grepcmd=cmd1 + cmd2
+                now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                msg = "%s Restarting grep tail... %s\n" % (now,grepcmd)
+                p.printit('%s' % msg)
+                rc,out,errs = p.executecmd(grepcmd,False)
+                if rc != 0:
+                    p.printit("FATAL ERROR: Unable to restart the grep tail.")
+                    p.cleanup(rc)            
         
         if delta < 60:
             if buffcnt > 20:
                 # too much activity in short duration, back off for awhile, but notify admin
                 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")    
-                msg = "%s: too many alerts (%d) in short interim. Sleeping for 10 minutes..." % (now, buffcnt)
+                msg = "%s too many alerts (%d) in short interim. Sleeping for 10 minutes..." % (now, buffcnt)
                 p.sendalert(msg)
                 if not tailfinished:
                     sleepsec = sleepsec + 600                
@@ -2549,7 +2631,7 @@ while True:
         elif p.alertcnt > p.max_alerts:
             # exceeded maximum alerts for this iteration of program
             now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")    
-            msg = "%s: Max Alerts (%d) exceeded. Program terminating prematurely." % (now, p.max_alerts)
+            msg = "%s Max Alerts (%d) exceeded. Program terminating prematurely." % (now, p.max_alerts)
             p.sendalert(msg)
             bAbort = True
             break;            
@@ -2566,7 +2648,7 @@ while True:
             if buffered_alerts != '':
                 if p.verbose:
                     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")    
-                    p.printit("%s: VERBOSE: sending %d buffered alerts(A)." % (now, buffered_alerts_cnt))            
+                    p.printit("%s VERBOSE:sending %d buffered alerts(A)." % (now, buffered_alerts_cnt))            
                 rc = p.sendalert(buffered_alerts)
                 if rc != 0:
                     p.cleanup(1)    
@@ -2589,7 +2671,7 @@ while True:
             time_delta = round(time_now - p.time_start)
             if time_delta > p.seconds:
                 if not tailfinished:
-                    p.printit("%s: Tail finished." % now)
+                    p.printit("%s INFO:   Tail finished." % now)
                 tailfinished = 1
             p.alert.seek(where)
         else:
@@ -2599,31 +2681,28 @@ while True:
             else:
                 if p.debug:
                     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    p.printit("%s: DEBUG: evaluating msg: %s" % (now, line.strip()))
+                    p.printit("%s DEBUG:  evaluating msg: %s" % (now, line.strip()))
+
                 if p.alertvalidated(line.strip()):
-                    # no need to keep track of sending out too many alerts since we buffer them now
-                    #buffcnt = buffcnt + 1    
-                    
-                    # v3.1: buffer the alerts
-                    buffered_alerts = buffered_alerts + line.strip() + '\n'
-                    buffered_alerts_cnt = buffered_alerts_cnt + 1
-                    if p.debug:
-                        p.printit("%s: %d buffered alert=%s" % (now, buffered_alerts_cnt, line.strip()))
-                    #rc = p.sendalert(line.strip())
-                    #if rc != 0:
-                    #    p.cleanup(1)    
+                    if p.sendemail:
+                        # buffer qualified alerts for email delivery
+                        buffered_alerts = buffered_alerts + line.strip() + '\n'
+                        buffered_alerts_cnt = buffered_alerts_cnt + 1
+                        if p.verbose:
+                            p.printit("%s %d buffered alert=%s" % (now, buffered_alerts_cnt, line.strip()))
+
                 else:
                     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")                    
                     if p.debug:
-                        p.printit("%s: DEBUG: bypass(2) bypass=%r  for %s\n" % (now, p.bypass, line.strip()))
+                        p.printit("%s DEBUG:  bypass(2) bypass=%r  for %s\n" % (now, p.bypass, line.strip()))
 
 if buffered_alerts != '':
     if p.verbose:
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")    
-        p.printit("%s: VERBOSE: sending %d buffered alerts(B)." % (now, buffered_alerts_cnt))
+        p.printit("%s VERBOSE:sending %d buffered alerts(B)." % (now, buffered_alerts_cnt))
     rc = p.sendalert(buffered_alerts)
                 
 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")    
-p.printit("%s: Daily Monitoring ending. %d alert(s) detected." % (now, p.alertcnt))
+p.printit("%s INFO:   Daily Monitoring ending. %d alert(s) sent. (send email enabled = %s)" % (now, p.alertcnt, p.sendemail))
 p.cleanup(0)
 
